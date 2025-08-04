@@ -40,7 +40,7 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
       return
     }
     const { data, error } = await supabase
-      .from<Category>('categories')
+      .from('categories')           // <–– sin genéricos
       .select('id, name')
       .eq('user_id', user.id)
       .order('name', { ascending: true })
@@ -82,7 +82,7 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
     let categoryId = form.category_id
     if (addingNew && newCategoryName.trim()) {
       const { error: catErr } = await supabase
-        .from<Category>('categories')
+        .from('categories')         // <–– sin genéricos
         .insert({
           name: newCategoryName.trim(),
           user_id: user.id,

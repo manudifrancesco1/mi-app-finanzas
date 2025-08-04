@@ -1,157 +1,165 @@
 // src/pages/categories.tsx
-import { useState, useEffect } from 'react'
+import { NextPage } from 'next'
+import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
-import { useRouter } from 'next/router'
 
 type Category = {
   id: number
   name: string
-  type: 'income' | 'expense'
   is_fixed: boolean
 }
 
-export default function CategoriesPage() {
-  const router = useRouter()
+const Categories: NextPage = () => {
   const [categories, setCategories] = useState<Category[]>([])
-  const [form, setForm] = useState({
-    id: null as number | null,
+  const [form, setForm] = useState<{ name: string; is_fixed: boolean }>({
     name: '',
-    type: 'expense' as 'income' | 'expense',
     is_fixed: false
   })
   const [error, setError] = useState<string | null>(null)
 
   // 1) Cargar categorías
-  const fetchCategories = async () => {
-    const { data, error } = await supabase
-      .from('categories')
-      .select('id,name,type,is_fixed')
-      .eq('user_id', (await supabase.auth.getUser()).data.user!.id)
-      .order('name')
-    if (error) setError(error.message)
-    else setCategories(data || [])
-  }
-
   useEffect(() => {
-    fetchCategories()
+    ;(async () => {
+      const {
+        data: { user }
+      } = await supabase.auth.getUser()
+      if (!user) return
+
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, is_fixed')
+        .eq('user_id', user.id)
+        .eq('type', 'expense')
+        .order('name', { ascending: true })
+
+      if (error) {
+        setError(error.message)
+      } else {
+        setCategories(data || [])
+      }
+    })()
   }, [])
 
   // 2) Cambio en inputs
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value, type, checked } = e.target
-    setForm((f) => ({
-      ...f,
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    const target = e.target as HTMLInputElement
+    const { name, value, type, checked } = target
+    setForm((prev) => ({
+      ...prev,
       [name]: type === 'checkbox' ? checked : value
     }))
   }
 
-  // 3) Crear o actualizar
-  const handleSubmit = async () => {
+  // 3) Guardar categoría
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
     setError(null)
-    const userId = (await supabase.auth.getUser()).data.user!.id
+
+    const {
+      data: { user }
+    } = await supabase.auth.getUser()
+    if (!user) {
+      setError('Debes iniciar sesión')
+      return
+    }
+
     const payload = {
-      user_id: userId,
       name: form.name,
-      type: form.type,
-      is_fixed: form.is_fixed
+      is_fixed: form.is_fixed,
+      type: 'expense',
+      user_id: user.id
     }
-    let err
-    if (form.id) {
-      ;({ error: err } = await supabase
-        .from('categories')
-        .update(payload)
-        .eq('id', form.id))
+
+    const { error: insErr } = await supabase.from('categories').insert(payload)
+    if (insErr) {
+      setError(insErr.message)
     } else {
-      ;({ error: err } = await supabase
+      // recargar
+      const { data } = await supabase
         .from('categories')
-        .insert(payload))
-    }
-    if (err) setError(err.message)
-    else {
-      setForm({ id: null, name: '', type: 'expense', is_fixed: false })
-      fetchCategories()
+        .select('id, name, is_fixed')
+        .eq('user_id', user.id)
+        .eq('type', 'expense')
+        .order('name', { ascending: true })
+      setCategories(data || [])
+      setForm({ name: '', is_fixed: false })
     }
   }
 
-  // 4) Editar fila
-  const startEdit = (cat: Category) => {
-    setForm({
-      id: cat.id,
-      name: cat.name,
-      type: cat.type,
-      is_fixed: cat.is_fixed
-    })
+  // 4) Eliminar categoría
+  const handleDelete = async (id: number) => {
+    if (!confirm('¿Eliminar categoría?')) return
+    const { error: delErr } = await supabase.from('categories').delete().eq('id', id)
+    if (delErr) {
+      setError(delErr.message)
+    } else {
+      setCategories(categories.filter((c) => c.id !== id))
+    }
   }
 
   return (
-    <div className="min-h-screen p-6 bg-gray-50">
-      <button onClick={() => router.push('/')} className="mb-4 text-blue-600 hover:underline">
-        ← Dashboard
-      </button>
+    <main className="p-4 space-y-6">
+      <h1 className="text-2xl font-bold">Categorías</h1>
+      {error && <p className="text-red-600">{error}</p>}
 
-      <h1 className="text-2xl font-semibold mb-4">Categorías</h1>
-      {error && <p className="text-red-500 mb-2">{error}</p>}
-
-      {/* Formulario */}
-      <div className="bg-white p-4 rounded shadow mb-6 grid grid-cols-1 md:grid-cols-4 gap-2">
-        <input
-          name="name"
-          type="text"
-          placeholder="Nombre"
-          value={form.name}
-          onChange={handleChange}
-          className="border p-2 rounded md:col-span-2"
-        />
-        <select
-          name="type"
-          value={form.type}
-          onChange={handleChange}
-          className="border p-2 rounded"
-        >
-          <option value="expense">Gasto</option>
-          <option value="income">Ingreso</option>
-        </select>
-        <label className="flex items-center gap-2">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block mb-1">Nombre</label>
           <input
+            type="text"
+            name="name"
+            value={form.name}
+            onChange={handleChange}
+            className="w-full border rounded p-2"
+            required
+          />
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <input
+            id="is_fixed"
             name="is_fixed"
             type="checkbox"
             checked={form.is_fixed}
             onChange={handleChange}
-            className="h-5 w-5"
+            className="h-4 w-4"
           />
-          <span>Fijo</span>
-        </label>
-        <button
-          onClick={handleSubmit}
-          className="bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition md:col-span-1"
-        >
-          {form.id ? 'Actualizar' : 'Agregar'}
-        </button>
-      </div>
+          <label htmlFor="is_fixed">Gasto fijo</label>
+        </div>
 
-      {/* Listado */}
-      <ul className="space-y-2">
-        {categories.map((cat) => (
-          <li
-            key={cat.id}
-            className="bg-white p-4 rounded shadow flex justify-between items-center"
-          >
-            <div>
-              <div className="font-medium">{cat.name}</div>
-              <div className="text-sm text-gray-600">
-                {cat.type} {cat.is_fixed && '· Fijo'}
-              </div>
-            </div>
-            <button
-              onClick={() => startEdit(cat)}
-              className="text-blue-500 hover:underline text-sm"
+        <button
+          type="submit"
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+        >
+          Guardar
+        </button>
+      </form>
+
+      <section>
+        <h2 className="text-xl font-semibold mb-2">Lista de categorías</h2>
+        <ul className="space-y-2">
+          {categories.map((cat) => (
+            <li
+              key={cat.id}
+              className="flex justify-between items-center bg-white p-3 rounded shadow-sm"
             >
-              Editar
-            </button>
-          </li>
-        ))}
-        {categories.length === 0 && <p className="text-gray-500">Sin categorías aún.</p>}
-      </ul>
-    </div>
+              <span>
+                {cat.name} {cat.is_fixed && <em>(Fijo)</em>}
+              </span>
+              <button
+                onClick={() => handleDelete(cat.id)}
+                className="text-red-600 hover:underline"
+              >
+                Eliminar
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
   )
 }
+
+export default Categories

@@ -100,22 +100,30 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
 
     let cat_id = form.category_id
     if (showNewCategory && form.new_category?.trim()) {
-      const { data: [newCat], error: catErr } = await supabase
+      const { data, error: catErr } = await supabase
         .from('categories')
         .insert({ user_id: user.id, name: form.new_category.trim(), type: 'expense', is_fixed: false })
-        .select('id').limit(1)
-      if (catErr) { setError(catErr.message); return }
-      cat_id = newCat.id
+        .select('id')
+        .limit(1)
+      if (catErr || !data || data.length === 0) {
+        setError(catErr?.message || 'Error al crear categoría')
+        return
+      }
+      cat_id = data[0].id
     }
 
     let sub_id = form.subcategory_id ?? null
     if (showNewSubcategory && form.new_subcategory?.trim()) {
-      const { data: [newSub], error: subErr } = await supabase
+      const { data: subData, error: subErr } = await supabase
         .from('subcategories')
         .insert({ user_id: user.id, category_id: cat_id, name: form.new_subcategory.trim() })
-        .select('id').limit(1)
-      if (subErr) { setError(subErr.message); return }
-      sub_id = newSub.id
+        .select('id')
+        .limit(1)
+      if (subErr || !subData || subData.length === 0) {
+        setError(subErr?.message || 'Error al crear subcategoría')
+        return
+      }
+      sub_id = subData[0].id
     }
 
     const payload: any = {
@@ -231,25 +239,42 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
       })
     if (insErr) { setError(insErr.message); return }
     setPaid(p => ({ ...p, [catId]: true }))
-    // modal stays open
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center px-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center px-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl p-6 w-full max-w-md"
+        onClick={e => e.stopPropagation()}
+      >
         {/* Tabs */}
         <div className="flex mb-4 rounded overflow-hidden">
           <button
             onClick={() => setMode('variable')}
-            className={`flex-1 py-2 text-center transition-colors ${mode==='variable'?'bg-blue-500 text-white':'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
-          >Variable</button>
+            className={`flex-1 py-2 text-center transition-colors ${
+              mode === 'variable'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Variable
+          </button>
           <button
             onClick={() => setMode('fixed')}
-            className={`flex-1 py-2 text-center transition-colors ${mode==='fixed'?'bg-blue-500 text-white':'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
-          >Fijo</button>
+            className={`flex-1 py-2 text-center transition-colors ${
+              mode === 'fixed'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            Fijo
+          </button>
         </div>
 
-        {mode==='fixed' ? (
+        {mode === 'fixed' ? (
           <>
             <h2 className="text-lg font-medium mb-3">Pagos fijos</h2>
             {error && <p className="text-red-500 mb-2">{error}</p>}
@@ -267,11 +292,18 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
 
             <ul className="space-y-4 mb-4">
               {fixedCats.map(cat => (
-                <li key={cat.id} className={`flex items-center gap-3 p-2 rounded ${paid[cat.id]?'bg-green-100':''}`}>
+                <li
+                  key={cat.id}
+                  className={`flex items-center gap-3 p-2 rounded ${
+                    paid[cat.id] ? 'bg-green-100' : ''
+                  }`}
+                >
                   <span className="w-1/2">{cat.name}</span>
                   <input
                     type="number"
-                    min="0" step="0.01" placeholder="0.00"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
                     value={fixedAmounts[cat.id]}
                     onChange={e => handleFixedAmount(cat.id, e.target.value)}
                     disabled={paid[cat.id]}
@@ -280,19 +312,29 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
                   <button
                     onClick={() => handleSaveFixed(cat.id)}
                     disabled={paid[cat.id]}
-                    className={`px-3 py-1 rounded ${paid[cat.id]?'bg-green-500 text-white':'bg-blue-500 text-white hover:bg-blue-600'}`}
-                  >{paid[cat.id]?'✓':'Agregar'}</button>
+                    className={`px-3 py-1 rounded ${
+                      paid[cat.id]
+                        ? 'bg-green-500 text-white'
+                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                    }`}
+                  >
+                    {paid[cat.id] ? '✓' : 'Agregar'}
+                  </button>
                 </li>
               ))}
             </ul>
 
             <div className="flex justify-end">
-              <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">Cerrar</button>
+              <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">
+                Cerrar
+              </button>
             </div>
           </>
         ) : (
           <>
-            <h2 className="text-lg font-medium mb-4">{isEditing?'Editar gasto':'Nuevo gasto'}</h2>
+            <h2 className="text-lg font-medium mb-4">
+              {isEditing ? 'Editar gasto' : 'Nuevo gasto'}
+            </h2>
             {error && <p className="text-red-500 mb-2">{error}</p>}
 
             {/* Quick categories */}
@@ -300,11 +342,23 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
               {topCategories.map(c => (
                 <button
                   key={c.id}
-                  onClick={() => { setForm(f => ({ ...f, category_id: c.id })); setShowNewCategory(false) }}
-                  className={`px-3 py-1 rounded-full whitespace-nowrap ${form.category_id===c.id?'bg-blue-500 text-white':'bg-gray-200 text-gray-700'}`}
-                >{c.name}</button>
+                  onClick={() => {
+                    setForm(f => ({ ...f, category_id: c.id }))
+                    setShowNewCategory(false)
+                  }}
+                  className={`px-3 py-1 rounded-full whitespace-nowrap ${
+                    form.category_id === c.id
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  {c.name}
+                </button>
               ))}
-              <button onClick={() => setShowNewCategory(v => !v)} className="px-3 py-1 rounded-full bg-green-500 text-white">
+              <button
+                onClick={() => setShowNewCategory(v => !v)}
+                className="px-3 py-1 rounded-full bg-green-500 text-white"
+              >
                 <PlusIcon className="h-5 w-5" />
               </button>
             </div>
@@ -325,11 +379,15 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
                 className="w-full border p-2 rounded mb-3"
               >
                 <option value={0}>-- Selecciona categoría --</option>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {categories.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
               </select>
             )}
 
-            {/* Subcategory */}
+            {/* Subcategory selector */}
             <div className="relative mb-3">
               <button
                 onClick={() => setShowNewSubcategory(v => !v)}
@@ -355,7 +413,11 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
                   className="w-full border p-2 rounded"
                 >
                   <option value={0}>-- Selecciona subcategoría --</option>
-                  {subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {subcategories.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
                 </select>
               ) : (
                 <p className="text-gray-500">Selecciona categoría primero</p>
@@ -364,13 +426,21 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
 
             {/* Payment type */}
             <div className="flex gap-2 mb-3">
-              {(['credit','debit','transfer'] as const).map(type => (
+              {(['credit', 'debit', 'transfer'] as const).map(type => (
                 <button
                   key={type}
                   onClick={() => setForm(f => ({ ...f, payment_type: type }))}
-                  className={`flex-1 py-2 rounded ${form.payment_type===type?'bg-blue-500 text-white':'bg-gray-200 text-gray-700'}`}
+                  className={`flex-1 py-2 rounded ${
+                    form.payment_type === type
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-200 text-gray-700'
+                  }`}
                 >
-                  {type==='credit'?'Crédito':type==='debit'?'Débito':'Transferencia'}
+                  {type === 'credit'
+                    ? 'Crédito'
+                    : type === 'debit'
+                    ? 'Débito'
+                    : 'Transferencia'}
                 </button>
               ))}
             </div>
@@ -379,14 +449,25 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
             {form.payment_type === 'credit' && (
               <>
                 <div className="flex gap-2 mb-3">
-                  {[1,3,6,12].map(n => (
+                  {[1, 3, 6, 12].map(n => (
                     <button
                       key={n}
                       onClick={() => setForm(f => ({ ...f, installments: String(n) }))}
-                      className={`px-3 py-1 rounded-full ${form.installments===String(n)?'bg-blue-500 text-white':'bg-gray-200 text-gray-700'}`}
-                    >{n}</button>
+                      className={`px-3 py-1 rounded-full ${
+                        form.installments === String(n)
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-gray-200 text-gray-700'
+                      }`}
+                    >
+                      {n}
+                    </button>
                   ))}
-                  <button onClick={() => setCustomInstall(true)} className="px-3 py-1 rounded-full bg-gray-200 text-gray-700">+</button>
+                  <button
+                    onClick={() => setCustomInstall(true)}
+                    className="px-3 py-1 rounded-full bg-gray-200 text-gray-700"
+                  >
+                    +
+                  </button>
                 </div>
                 {(customInstall || !['1','3','6','12'].includes(form.installments!)) && (
                   <input
@@ -400,9 +481,9 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
                   />
                 )}
               </>
-            )}
+            )} 
 
-            {/* Amount, Date, Desc, Tags */}
+            {/* Amount, Date, Description, Tags */}
             <input
               name="amount"
               type="number"
@@ -436,9 +517,14 @@ export default function ExpenseModal({ onClose, onSaved, initial }: Props) {
             />
 
             <div className="flex justify-end space-x-2">
-              <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">Cancelar</button>
-              <button onClick={handleSubmitVariable} className="px-4 py-2 bg-blue-500 text-white rounded">
-                {isEditing?'Guardar cambios':'Guardar'}
+              <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded">
+                Cancelar
+              </button>
+              <button
+                onClick={handleSubmitVariable}
+                className="px-4 py-2 bg-blue-500 text-white rounded"
+              >
+                {isEditing ? 'Guardar cambios' : 'Guardar'}
               </button>
             </div>
           </>

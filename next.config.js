@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  // aquí podés agregar rewrites, PWA, env, etc.
+  output: 'export',
+  // Si necesitás URLs limpias con slash final:
+  // trailingSlash: true,
 }
 
 module.exports = nextConfig
