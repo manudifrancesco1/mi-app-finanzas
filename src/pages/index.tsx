@@ -103,14 +103,14 @@ const Dashboard: NextPage = () => {
         const cat = Array.isArray((t as any).category)
           ? (t as any).category[0]?.name
           : (t as any).category?.name
-        if (t.expense_mode === 'fixed') fixedMap[cat] = (fixedMap[cat]||0) + t.amount
+        if (t.expense_mode === 'fixed') fixedMap[cat] = (fixedMap[cat] || 0) + t.amount
         else {
-          variableMap[cat] = (variableMap[cat]||0) + t.amount
+          variableMap[cat] = (variableMap[cat] || 0) + t.amount
           const sub = (t as any).subcategory
           const subName = Array.isArray(sub) ? sub[0]?.name : sub?.name
           if (subName) {
-            subByCat[cat] = subByCat[cat]||{}
-            subByCat[cat][subName] = (subByCat[cat][subName]||0) + t.amount
+            subByCat[cat] = subByCat[cat] || {}
+            subByCat[cat][subName] = (subByCat[cat][subName] || 0) + t.amount
           }
         }
       })
@@ -139,22 +139,49 @@ const Dashboard: NextPage = () => {
   return (
     <>
       <LogoutButton />
+
+      {/* Selector de mes */}
+      <div className="flex items-center justify-center space-x-4 my-4">
+        <ChevronLeftIcon
+          className="h-6 w-6 cursor-pointer text-gray-600"
+          onClick={() => {
+            const [y, m] = selectedMonth.split('-').map(Number)
+            const prev = new Date(y, m - 2, 1)
+            setSelectedMonth(
+              `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`
+            )
+          }}
+        />
+        <span className="text-lg font-semibold">{selectedMonth}</span>
+        <ChevronRightIcon
+          className="h-6 w-6 cursor-pointer text-gray-600"
+          onClick={() => {
+            const [y, m] = selectedMonth.split('-').map(Number)
+            const next = new Date(y, m, 1)
+            setSelectedMonth(
+              `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+            )
+          }}
+        />
+      </div>
+
+      {/* Cards */}
       <main className="p-4 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         {/* Ingresos */}
         <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
           <header className="flex items-center mb-4">
-            <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2"/>
+            <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
             <h3 className="text-lg font-semibold">Ingresos</h3>
           </header>
           <p className="text-3xl font-bold mb-4">${totalIncomes.toLocaleString()}</p>
           <ul className="space-y-2 flex-1 overflow-auto">
-            {incomesByCategory.map(cat=>(
+            {incomesByCategory.map(cat => (
               <li key={cat.name} className="flex justify-between text-sm">
                 <span className="truncate">{cat.name}</span>
                 <span>${cat.total.toLocaleString()}</span>
               </li>
             ))}
-            {devolucionesTotal>0 && (
+            {devolucionesTotal > 0 && (
               <li className="flex justify-between text-sm text-red-600">
                 <span>Devoluciones</span>
                 <span>-${devolucionesTotal.toLocaleString()}</span>
@@ -166,12 +193,12 @@ const Dashboard: NextPage = () => {
         {/* Gastos Fijos */}
         <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
           <header className="flex items-center mb-4">
-            <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2"/>
+            <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
             <h3 className="text-lg font-semibold">Gastos Fijos</h3>
           </header>
           <p className="text-3xl font-bold mb-4">${totalFixedExpenses.toLocaleString()}</p>
           <ul className="space-y-2 flex-1 overflow-auto">
-            {fixedExpensesByCategory.map(cat=>(
+            {fixedExpensesByCategory.map(cat => (
               <li key={cat.name} className="flex justify-between text-sm">
                 <span className="truncate">{cat.name}</span>
                 <span>${cat.total.toLocaleString()}</span>
@@ -183,15 +210,15 @@ const Dashboard: NextPage = () => {
         {/* Gastos Variables */}
         <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
           <header className="flex items-center mb-4">
-            <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2"/>
+            <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
             <h3 className="text-lg font-semibold">Gastos Variables</h3>
           </header>
           <p className="text-3xl font-bold mb-4">${totalVariableExpenses.toLocaleString()}</p>
           <ul className="space-y-2 flex-1 overflow-auto">
-            {variableExpensesByCategory.map(cat=>(
+            {variableExpensesByCategory.map(cat => (
               <li key={cat.name}>
                 <button
-                  onClick={()=>toggleCategory(cat.name)}
+                  onClick={() => toggleCategory(cat.name)}
                   className="w-full flex justify-between text-sm py-1"
                 >
                   <span className="truncate">{cat.name}</span>
@@ -199,7 +226,7 @@ const Dashboard: NextPage = () => {
                 </button>
                 {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
                   <ul className="pl-4 space-y-1">
-                    {variableSubcategoriesByCategory[cat.name].map(sub=>(
+                    {variableSubcategoriesByCategory[cat.name].map(sub => (
                       <li key={sub.name} className="flex justify-between text-xs">
                         <span className="truncate italic">{sub.name}</span>
                         <span>${sub.total.toLocaleString()}</span>
@@ -215,10 +242,14 @@ const Dashboard: NextPage = () => {
         {/* Balance */}
         <section className="bg-white rounded-2xl shadow-md p-6 sm:col-span-2 lg:col-span-1 flex flex-col">
           <header className="flex items-center mb-4">
-            <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2"/>
+            <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
             <h3 className="text-lg font-semibold">Balance</h3>
           </header>
-          <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
+          <p
+            className={`text-4xl font-bold ${
+              balance < 0 ? 'text-red-600' : 'text-green-600'
+            }`}
+          >
             ${balance.toLocaleString()}
           </p>
         </section>
