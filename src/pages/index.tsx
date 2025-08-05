@@ -169,8 +169,119 @@ const Dashboard: NextPage = () => {
     <>
       <LogoutButton />
       <main className="p-4 space-y-8">
-        {/* Aquí va tu JSX original para mostrar los datos de dashboard,
-            gráficos, listas de categorías y botones de navegación */}
+        {/* Navegación mes */}
+        <section className="flex items-center justify-between">
+          <ChevronLeftIcon
+            className="h-6 w-6 cursor-pointer"
+            onClick={() => {
+              const [y, m] = selectedMonth.split('-').map(Number)
+              const prev = new Date(y, m - 2, 1)
+              setSelectedMonth(
+                `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`
+              )
+            }}
+          />
+          <h2 className="text-lg font-semibold">{selectedMonth}</h2>
+          <ChevronRightIcon
+            className="h-6 w-6 cursor-pointer"
+            onClick={() => {
+              const [y, m] = selectedMonth.split('-').map(Number)
+              const next = new Date(y, m, 1)
+              setSelectedMonth(
+                `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+              )
+            }}
+          />
+        </section>
+
+        {/* Ingresos */}
+        <section className="bg-white p-4 rounded shadow space-y-2">
+          <div className="flex items-center space-x-2">
+            <ArrowUpIcon className="h-5 w-5 text-green-500" />
+            <h3 className="font-medium">Ingresos totales</h3>
+            <CurrencyDollarIcon className="h-5 w-5 text-gray-400 ml-auto" />
+          </div>
+          <p className="text-2xl font-bold">${totalIncomes.toLocaleString()}</p>
+          {/* Detalle por categoría */}
+          <ul className="divide-y">
+            {incomesByCategory.map(cat => (
+              <li key={cat.name} className="py-1 flex justify-between">
+                <span>{cat.name}</span>
+                <span>${cat.total.toLocaleString()}</span>
+              </li>
+            ))}
+            {devolucionesTotal > 0 && (
+              <li className="py-1 flex justify-between text-red-600">
+                <span>Devoluciones</span>
+                <span>-${devolucionesTotal.toLocaleString()}</span>
+              </li>
+            )}
+          </ul>
+        </section>
+
+        {/* Gastos fijos */}
+        <section className="bg-white p-4 rounded shadow space-y-2">
+          <div className="flex items-center space-x-2">
+            <ArrowDownIcon className="h-5 w-5 text-red-500" />
+            <h3 className="font-medium">Gastos fijos</h3>
+            <CurrencyDollarIcon className="h-5 w-5 text-gray-400 ml-auto" />
+          </div>
+          <p className="text-2xl font-bold">${totalFixedExpenses.toLocaleString()}</p>
+          <ul className="divide-y">
+            {fixedExpensesByCategory.map(cat => (
+              <li key={cat.name} className="py-1 flex justify-between">
+                <span>{cat.name}</span>
+                <span>${cat.total.toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+
+        {/* Gastos variables */}
+        <section className="bg-white p-4 rounded shadow space-y-2">
+          <div className="flex items-center space-x-2">
+            <ArrowDownIcon className="h-5 w-5 text-orange-500" />
+            <h3 className="font-medium">Gastos variables</h3>
+            <CurrencyDollarIcon className="h-5 w-5 text-gray-400 ml-auto" />
+          </div>
+          <p className="text-2xl font-bold">${totalVariableExpenses.toLocaleString()}</p>
+          {variableExpensesByCategory.map(cat => (
+            <div key={cat.name}>
+              <button
+                onClick={() => toggleCategory(cat.name)}
+                className="w-full text-left flex justify-between py-1"
+              >
+                <span>{cat.name}</span>
+                <span>${cat.total.toLocaleString()}</span>
+              </button>
+              {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
+                <ul className="pl-4 divide-y">
+                  {variableSubcategoriesByCategory[cat.name].map(sub => (
+                    <li key={sub.name} className="py-1 flex justify-between">
+                      <span className="italic">{sub.name}</span>
+                      <span>${sub.total.toLocaleString()}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </section>
+
+        {/* Balance */}
+        <section className="bg-white p-4 rounded shadow space-y-2">
+          <div className="flex items-center space-x-2">
+            <CurrencyDollarIcon className="h-5 w-5 text-blue-500" />
+            <h3 className="font-medium">Balance del mes</h3>
+          </div>
+          <p
+            className={`text-2xl font-bold ${
+              balance < 0 ? 'text-red-600' : 'text-green-600'
+            }`}
+          >
+            ${balance.toLocaleString()}
+          </p>
+        </section>
       </main>
     </>
   )
