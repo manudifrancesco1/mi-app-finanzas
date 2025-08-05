@@ -224,3 +224,4 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
     </div>
   )
 }
+export default IncomeModal

@@ -1,16 +1,14 @@
 /** next.config.js **/
 /** @type {import('next').NextConfig} **/
+const isProd = process.env.NODE_ENV === 'production'
+
 const nextConfig = {
-  // Le decimos a Next que genere estáticos
-  output: 'export',
+  // Solo en producción generamos export estático:
+  ...(isProd && { output: 'export' }),
 
-  // Ruta base para todas las páginas
   basePath: '/mi-app-finanzas',
-  // Prefijo para assets estáticos
   assetPrefix: '/mi-app-finanzas/',
-
-  reactStrictMode: true,
-  // … cualquier otra configuración que ya tuvieras
+  reactStrictMode: true
 }
 
 module.exports = nextConfig

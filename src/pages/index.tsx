@@ -4,6 +4,8 @@ import { useRouter } from 'next/router'
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import LogoutButton from '../components/LogoutButton'
+import ExpenseModal from '../components/ExpenseModal'
+import IncomeModal from '../components/IncomeModal'
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -34,11 +36,13 @@ const Dashboard: NextPage = () => {
     Record<string, CategoryAmount[]>
   >({})
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({})
+  const [showExpenseModal, setShowExpenseModal] = useState(false)
+  const [showIncomeModal, setShowIncomeModal] = useState(false)
 
   const toggleCategory = (name: string) =>
     setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
 
-  // 1) Comprobar sesión en cliente
+  // 1) Comprobar sesión
   useEffect(() => {
     const check = async () => {
       const {
@@ -54,7 +58,7 @@ const Dashboard: NextPage = () => {
     return () => listener.subscription.unsubscribe()
   }, [router])
 
-  // 2) Fetch de datos tras confirmar sesión
+  // 2) Fetch datos
   useEffect(() => {
     if (!sessionChecked) return
     const fetchData = async () => {
@@ -89,10 +93,12 @@ const Dashboard: NextPage = () => {
       setTotalIncomes(incArr.reduce((s, x) => s + x.total, 0))
       setDevolucionesTotal(devol)
 
-      // Gastos variables y fijos
+      // Gastos
       const { data: txs } = await supabase
         .from('transactions')
-        .select('category:category_id(name),subcategory:subcategory_id(name),amount,expense_mode')
+        .select(
+          'category:category_id(name),subcategory:subcategory_id(name),amount,expense_mode'
+        )
         .eq('user_id', uid)
         .gte('date', start)
         .lte('date', end)
@@ -134,14 +140,15 @@ const Dashboard: NextPage = () => {
   if (sessionChecked === null) return null
 
   const netVar = totalVariableExpenses - devolucionesTotal
-  const balance = totalIncomes - (totalFixedExpenses + netVar)
+  const totalExpenses = totalFixedExpenses + netVar
+  const balance = totalIncomes - totalExpenses
 
   return (
     <>
       <LogoutButton />
 
-      {/* Selector de mes */}
-      <div className="flex items-center justify-center space-x-4 my-4">
+      {/* Selector de mes y acciones */}
+      <div className="flex flex-wrap items-center justify-center space-x-4 my-4">
         <ChevronLeftIcon
           className="h-6 w-6 cursor-pointer text-gray-600"
           onClick={() => {
@@ -163,7 +170,27 @@ const Dashboard: NextPage = () => {
             )
           }}
         />
+        <button
+          onClick={() => setShowExpenseModal(true)}
+          className="ml-4 px-3 py-1 rounded-full bg-red-500 text-white text-sm shadow-sm hover:bg-red-600 transition"
+        >
+          + Nuevo Gasto
+        </button>
+        <button
+          onClick={() => setShowIncomeModal(true)}
+          className="px-3 py-1 rounded-full bg-green-500 text-white text-sm shadow-sm hover:bg-green-600 transition"
+        >
+          + Nuevo Ingreso
+        </button>
       </div>
+
+      {/* Expense & Income Modals */}
+      {showExpenseModal && (
+        <ExpenseModal onClose={() => setShowExpenseModal(false)} />
+      )}
+      {showIncomeModal && (
+        <IncomeModal onClose={() => setShowIncomeModal(false)} />
+      )}
 
       {/* Cards */}
       <main className="p-4 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
