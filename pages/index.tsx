@@ -3,7 +3,6 @@ import { NextPage } from 'next'
 import { useRouter } from 'next/router'
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../src/lib/supabaseClient'
-import LogoutButton from '../src/components/LogoutButton'
 import ExpenseModal from '../src/components/ExpenseModal'
 import IncomeModal from '../src/components/IncomeModal'
 import {
@@ -11,8 +10,34 @@ import {
   ChevronRightIcon,
   ArrowDownIcon,
   ArrowUpIcon,
-  CurrencyDollarIcon
+  CurrencyDollarIcon,
+  PlusIcon,
+  MinusIcon
 } from '@heroicons/react/24/outline'
+
+// Formatting helpers
+const formatARS = (n: number) =>
+  n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const monthLabel = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  const label = d.toLocaleString('es-AR', { month: 'long' });
+  return label.charAt(0).toUpperCase() + label.slice(1);
+};
+
+const Amount: React.FC<{ value: number; negative?: boolean; className?: string }> = ({
+  value,
+  negative,
+  className
+}) => {
+  const sign = negative ? '-' : '';
+  return (
+    <span className={`tabular-nums ${negative ? 'text-red-600' : ''} ${className || ''}`}>
+      {sign}${formatARS(value)}
+    </span>
+  );
+};
 
 type CategoryAmount = { name: string; total: number }
 
@@ -41,6 +66,13 @@ const Dashboard: NextPage = () => {
 
   const toggleCategory = (name: string) =>
     setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+      router.replace('/login');
+    } catch (_) {}
+  };
 
   // 1) Comprobar sesión
   useEffect(() => {
@@ -140,140 +172,166 @@ const Dashboard: NextPage = () => {
 
   return (
     <>
-      <LogoutButton />
+      <nav className="fixed top-0 left-0 right-0 z-50 shadow-md bg-white">
+        {/* Selector de mes y acciones */}
+        <div className="mx-auto max-w-screen-md px-3 py-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-center">
+          <div className="flex items-center justify-center gap-3">
+            <button
+              aria-label="Mes anterior"
+              className="p-2 rounded-full hover:bg-gray-100 active:scale-95 transition"
+              onClick={() => {
+                const [y, m] = selectedMonth.split('-').map(Number)
+                const prev = new Date(y, m - 2, 1)
+                setSelectedMonth(`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}`)
+              }}
+            >
+              <ChevronLeftIcon className="h-5 w-5 text-gray-700" />
+            </button>
 
-      {/* Selector de mes y acciones */}
-      <div className="flex flex-wrap items-center justify-center space-x-4 my-4">
-        <ChevronLeftIcon
-          className="h-6 w-6 cursor-pointer text-gray-600"
-          onClick={() => {
-            const [y, m] = selectedMonth.split('-').map(Number)
-            const prev = new Date(y, m - 2, 1)
-            setSelectedMonth(`${prev.getFullYear()}-${String(prev.getMonth()+1).padStart(2,'0')}`)
-          }}
-        />
-        <span className="text-lg font-semibold">{selectedMonth}</span>
-        <ChevronRightIcon
-          className="h-6 w-6 cursor-pointer text-gray-600"
-          onClick={() => {
-            const [y, m] = selectedMonth.split('-').map(Number)
-            const next = new Date(y, m, 1)
-            setSelectedMonth(`${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}`)
-          }}
-        />
-        <button
-          onClick={() => setShowExpenseModal(true)}
-          className="ml-4 px-3 py-1 rounded-full bg-red-500 text-white text-sm shadow-sm hover:bg-red-600 transition"
-        >
-          + Nuevo Gasto
-        </button>
-        <button
-          onClick={() => setShowIncomeModal(true)}
-          className="px-3 py-1 rounded-full bg-green-500 text-white text-sm shadow-sm hover:bg-green-600 transition"
-        >
-          + Nuevo Ingreso
-        </button>
-      </div>
+            <span className="text-xl sm:text-2xl font-bold tracking-tight">
+              {monthLabel(selectedMonth)}
+            </span>
 
-      {/* Modales */}
-      {showExpenseModal && (
-        <ExpenseModal
-          onClose={() => setShowExpenseModal(false)}
-          onSaved={() => { setShowExpenseModal(false); /* recarga data si quieres */ }}
-        />
-      )}
-      {showIncomeModal && (
-        <IncomeModal
-          onClose={() => setShowIncomeModal(false)}
-          onSaved={() => { setShowIncomeModal(false); /* recarga data si quieres */}}
-        />
-      )}
+            <button
+              aria-label="Mes siguiente"
+              className="p-2 rounded-full hover:bg-gray-100 active:scale-95 transition"
+              onClick={() => {
+                const [y, m] = selectedMonth.split('-').map(Number)
+                const next = new Date(y, m, 1)
+                setSelectedMonth(`${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}`)
+              }}
+            >
+              <ChevronRightIcon className="h-5 w-5 text-gray-700" />
+            </button>
+          </div>
 
-      {/* Cards */}
-      <main className="p-4 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Ingresos */}
-        <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
-          <header className="flex items-center mb-4">
-            <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
-            <h3 className="text-lg font-semibold">Ingresos</h3>
-          </header>
-          <p className="text-3xl font-bold mb-4">${totalIncomes.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          <ul className="divide-y flex-1 space-y-1 overflow-auto">
-            {incomesByCategory.map(cat => (
-              <li key={cat.name} className="py-1 flex justify-between text-sm">
-                <span>{cat.name}</span>
-                <span>${cat.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </li>
-            ))}
-            {devolucionesTotal>0 && (
-              <li className="py-1 flex justify-between text-sm text-red-600">
-                <span>Devoluciones</span>
-                <span>-${devolucionesTotal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </li>
-            )}
-          </ul>
-        </section>
+          
+        </div>
+      </nav>
+      <div className="pt-16">
+        {/* Modales */}
+        {showExpenseModal && (
+          <ExpenseModal
+            onClose={() => setShowExpenseModal(false)}
+            onSaved={() => { setShowExpenseModal(false); /* recarga data si quieres */ }}
+          />
+        )}
+        {showIncomeModal && (
+          <IncomeModal
+            onClose={() => setShowIncomeModal(false)}
+            onSaved={() => { setShowIncomeModal(false); /* recarga data si quieres */}}
+          />
+        )}
 
-        {/* Gastos Fijos */}
-        <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
-          <header className="flex items-center mb-4">
-            <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
-            <h3 className="text-lg font-semibold">Gastos Fijos</h3>
-          </header>
-          <p className="text-3xl font-bold mb-4">${totalFixedExpenses.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          <ul className="divide-y flex-1 space-y-1 overflow-auto">
-            {fixedExpensesByCategory.map(cat => (
-              <li key={cat.name} className="py-1 flex justify-between text-sm">
-                <span>{cat.name}</span>
-                <span>${cat.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {/* Floating action buttons */}
+        <div className="fixed right-4 bottom-24 sm:bottom-28 z-40 flex flex-col gap-3">
+          <button
+            onClick={() => setShowIncomeModal(true)}
+            aria-label="Nuevo ingreso"
+            className="w-14 h-14 rounded-full bg-green-500 text-white shadow-xl ring-1 ring-black/5 hover:bg-green-600 active:scale-95 transition flex items-center justify-center"
+          >
+            <PlusIcon className="w-7 h-7" />
+          </button>
+          <button
+            onClick={() => setShowExpenseModal(true)}
+            aria-label="Nuevo gasto"
+            className="w-14 h-14 rounded-full bg-red-500 text-white shadow-xl ring-1 ring-black/5 hover:bg-red-600 active:scale-95 transition flex items-center justify-center"
+          >
+            <MinusIcon className="w-7 h-7" />
+          </button>
+        </div>
 
-        {/* Gastos Variables */}
-        <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col">
-          <header className="flex items-center mb-4">
-            <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
-            <h3 className="text-lg font-semibold">Gastos Variables</h3>
-          </header>
-          <p className="text-3xl font-bold mb-4">${totalVariableExpenses.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-          <ul className="space-y-1 flex-1 overflow-auto">
-            {variableExpensesByCategory.map(cat => (
-              <li key={cat.name}>
-                <button
-                  onClick={() => toggleCategory(cat.name)}
-                  className="w-full flex justify-between text-sm py-1"
-                >
+        {/* Cards */}
+        <main className="p-4 pb-24 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+          {/* Balance */}
+          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
+            <header className="flex items-center mb-4">
+              <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
+              <h3 className="text-lg font-semibold">Balance</h3>
+            </header>
+            <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
+              <Amount value={balance} />
+            </p>
+          </section>
+
+          {/* Ingresos */}
+          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
+            <header className="flex items-center mb-4">
+              <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
+              <h3 className="text-lg font-semibold">Ingresos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
+            <ul className="divide-y space-y-1">
+              {incomesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
                   <span>{cat.name}</span>
-                  <span>${cat.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </button>
-                {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
-                  <ul className="pl-4 space-y-1">
-                    {variableSubcategoriesByCategory[cat.name].map(sub => (
-                      <li key={sub.name} className="flex justify-between text-xs py-1">
-                        <span className="italic">{sub.name}</span>
-                        <span>${sub.total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+              {devolucionesTotal>0 && (
+                <li className="py-1 flex justify-between text-sm text-red-600">
+                  <span>Devoluciones</span>
+                  <Amount className="text-right" value={devolucionesTotal} negative />
+                </li>
+              )}
+            </ul>
+          </section>
 
-        {/* Balance */}
-        <section className="bg-white rounded-2xl shadow-md p-6 flex flex-col sm:col-span-2 lg:col-span-1">
-          <header className="flex items-center mb-4">
-            <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
-            <h3 className="text-lg font-semibold">Balance</h3>
-          </header>
-          <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
-            ${balance.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </p>
-        </section>
-      </main>
+          {/* Gastos Fijos */}
+          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Fijos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {fixedExpensesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
+                  <span>{cat.name}</span>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {/* Gastos Variables */}
+          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Variables</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {variableExpensesByCategory.map(cat => (
+                <li key={cat.name}>
+                  <button
+                    onClick={() => toggleCategory(cat.name)}
+                    className="w-full flex justify-between text-sm py-1"
+                  >
+                    <span>{cat.name}</span>
+                    <Amount className="text-right" value={cat.total} />
+                  </button>
+                  {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
+                    <ul className="pl-4 space-y-1">
+                      {variableSubcategoriesByCategory[cat.name].map(sub => (
+                        <li key={sub.name} className="flex justify-between text-xs py-1">
+                          <span className="italic">{sub.name}</span>
+                          <Amount className="text-right" value={sub.total} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        </main>
+        <div className="py-3 text-center">
+          <button onClick={handleLogout} className="text-gray-400 text-xs underline">
+            Cerrar sesión
+          </button>
+        </div>
+      </div>
     </>
   )
 }
