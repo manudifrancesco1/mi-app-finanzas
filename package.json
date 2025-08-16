@@ -2,12 +2,12 @@
   "name": "mi-app-finanzas",
   "version": "1.0.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "export": "next build && next export",
-    "start": "next start"
-  },
+"scripts": {
+  "dev": "next dev",
+  "build": "next build",
+  "export": "rm -rf docs out && next build && mv out docs",
+  "start": "next start"
+},
   "dependencies": {
     "@heroicons/react": "^2.0.18",
     "@supabase/supabase-js": "^2.39.7",
