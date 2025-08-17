@@ -14,7 +14,7 @@ const uniqueByName = (arr: { id: number; name: string }[]) => {
   return out.sort((a, b) => a.name.localeCompare(b.name, 'es'))
 }
 
-import { supabase } from '../lib/supabaseClient'
+import { supabase } from '@/lib/supabaseClient'
 
 export type ExpenseForm = {
   id?: number

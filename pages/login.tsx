@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import type { NextPage } from 'next'
 import { useRouter } from 'next/router'
-import { supabase } from '../src/lib/supabaseClient'
+import { supabase } from '@/lib/supabaseClient'
 
 const Login: NextPage = () => {
   const router = useRouter()

@@ -1,6 +1,14 @@
 // src/components/IncomeModal.tsx
 import { supabase } from '../lib/supabaseClient'
 
+type IncomeForEdit = {
+  id: number
+  amount: number
+  date: string
+  description: string
+  category_id: number | null
+}
+
 const normalizeName = (s: string) => s.trim().toLowerCase()
 const uniqueByName = (arr: {id:number; name:string}[]) => {
   const seen = new Set<string>()
@@ -41,12 +49,28 @@ type Category = {
 type Props = {
   onClose: () => void
   onSaved: () => void
+  /** Modo edición desde la página: objeto ingreso con amount numérico */
+  income?: IncomeForEdit | null
+  /** Modo edición/creación antiguo: objeto formulario con amount string */
   initial?: IncomeForm
 }
 
-export function IncomeModal({ onClose, onSaved, initial }: Props) {
+export function IncomeModal({ onClose, onSaved, initial, income }: Props) {
+  // Adaptar prop `income` (amount numérico) al formulario (amount string)
+  const initialFromIncome: IncomeForm | undefined = income
+    ? {
+        id: income.id,
+        amount: String(income.amount),
+        date: income.date,
+        description: income.description,
+        category_id: income.category_id ?? undefined,
+      }
+    : undefined
+
+  const effectiveInitial: IncomeForm | undefined = initial ?? initialFromIncome
+
   const [form, setForm] = useState<IncomeForm>(() => {
-    if (initial) return initial
+    if (effectiveInitial) return effectiveInitial
     let lastCat: number | undefined
     try {
       const raw = localStorage.getItem(LAST_CATEGORY_KEY)
@@ -83,10 +107,10 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
   }, [])
 
   const handleDelete = async () => {
-    if (!initial?.id) return
+    if (!effectiveInitial?.id) return
     if (!window.confirm('¿Estás seguro de eliminar este ingreso?')) return
 
-    const { error } = await supabase.from('incomes').delete().eq('id', initial.id)
+    const { error } = await supabase.from('incomes').delete().eq('id', effectiveInitial.id)
     if (error) {
       console.error(error)
       alert('Error al eliminar el ingreso')
@@ -161,8 +185,8 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
     }
 
     let error
-    if (initial?.id) {
-      ;({ error } = await supabase.from('incomes').update(payload).eq('id', initial.id))
+    if (effectiveInitial?.id) {
+      ;({ error } = await supabase.from('incomes').update(payload).eq('id', effectiveInitial.id))
     } else {
       ;({ error } = await supabase.from('incomes').insert(payload))
     }
@@ -180,7 +204,7 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
       <div className="bg-white w-full max-w-md max-h-[90vh] rounded-lg overflow-hidden flex flex-col">
         {/* Header */}
         <div className="px-4 pt-4 pb-2 border-b">
-          <h2 className="text-lg font-semibold">{initial?.id ? 'Editar ingreso' : 'Nuevo ingreso'}</h2>
+          <h2 className="text-lg font-semibold">{effectiveInitial?.id ? 'Editar ingreso' : 'Nuevo ingreso'}</h2>
         </div>
 
         {/* Content (scrollable) */}
@@ -278,7 +302,7 @@ export function IncomeModal({ onClose, onSaved, initial }: Props) {
 
         {/* Footer sticky */}
         <div className="px-4 py-3 border-t bg-white flex gap-2 justify-end">
-          {initial?.id && (
+          {effectiveInitial?.id && (
             <button type="button" onClick={handleDelete} className="px-3 py-2 border rounded text-red-600">Eliminar</button>
           )}
           <button type="button" onClick={onClose} className="px-4 py-2 border rounded">Cancelar</button>

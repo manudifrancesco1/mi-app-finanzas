@@ -1,6 +1,6 @@
 import { NextPage } from 'next'
 import React, { useEffect, useState } from 'react'
-import { supabase } from '../src/lib/supabaseClient'
+import { supabase } from '@/lib/supabaseClient'
 import ExpenseModal, { ExpenseForm } from '../src/components/ExpenseModal'
 
 type Tx = {

@@ -1,7 +1,7 @@
 // src/pages/incomes.tsx
 import { NextPage } from 'next'
 import React, { useEffect, useState } from 'react'
-import { supabase } from '../src/lib/supabaseClient'
+import { supabase } from '@/lib/supabaseClient'
 import IncomeModal from '../src/components/IncomeModal'
 
 type Income = {
@@ -187,7 +187,7 @@ const Incomes: NextPage = () => {
       {showModal && (
         <IncomeModal
           onClose={() => setShowModal(false)}
-          onSave={() => {
+          onSaved={() => {
             setShowModal(false)
             loadIncomes()
           }}
