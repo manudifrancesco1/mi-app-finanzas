@@ -1,6 +1,6 @@
 // src/pages/budgets.tsx
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabaseClient'
+import { supabase } from '@/lib/supabaseClient'
 import { useRouter } from 'next/router'
 
 type Category = { id: number; name: string; type: string }
