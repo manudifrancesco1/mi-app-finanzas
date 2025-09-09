@@ -6,7 +6,24 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const admin = createClient(supabaseUrl, serviceRoleKey)
 
+
 const EMAIL_INGEST_SECRET = process.env.EMAIL_INGEST_SECRET!
+
+// Robust parser for Visa alert emails (AR format)
+function parseVisaAlertEmail(body: string) {
+  const merchant = /Comercio:\s*([^\n\r]+)/i.exec(body)?.[1]?.trim() ?? null;
+  const city = /Ciudad:\s*([^\n\r]+)/i.exec(body)?.[1]?.trim() ?? null;
+  const last4 = /Tarjeta:\s*(\d{4})/i.exec(body)?.[1]?.trim() ?? null;
+  const currency = /Moneda:\s*([A-Z]{3})/i.exec(body)?.[1]?.trim() ?? null;
+  // e.g. "Monto: 211278.59 (puede haber...)" or "Monto: 1,649.00 (aprox ...)"
+  const rawAmount = /Monto:\s*([\d.,]+)/i.exec(body)?.[1] ?? null;
+  const amount =
+    rawAmount != null
+      ? parseFloat(rawAmount.replace(/\./g, '').replace(',', '.'))
+      : null;
+
+  return { merchant, city, card_last4: last4, currency, amount };
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -34,32 +51,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const errors: any[] = []
 
     for (const row of pending || []) {
+      const parsed = parseVisaAlertEmail(String(row.body ?? ''));
+
+      const amount =
+        row.amount != null && !Number.isNaN(Number(row.amount))
+          ? Number(row.amount)
+          : parsed.amount;
+
+      const currency = row.currency ?? parsed.currency ?? 'ARS';
+      const merchant = row.merchant ?? parsed.merchant ?? null;
+
+      // If we still don't have a valid amount, skip to avoid NOT NULL errors
+      if (amount == null || Number.isNaN(Number(amount))) {
+        errors.push({ row, error: { message: 'Missing amount after parse' } });
+        continue;
+      }
+
       const payload = {
         user_id: row.user_id,
-        amount: row.amount,
-        currency: row.currency || 'ARS',
+        amount,
+        currency,
         date: row.date_local,
-        description: row.merchant || row.subject || 'Gasto tarjeta',
+        description: merchant ?? row.subject ?? 'Gasto tarjeta',
         tags: ['visa_alert'],
         payment_type: 'credit',
-        merchant: row.merchant,
+        merchant: merchant ?? undefined,
         source: 'email',
         raw_description: row.subject,
         hash: row.hash,
-      }
+      };
 
       const { data, error } = await admin
         .from('transactions')
         .upsert(payload, { onConflict: 'hash' })
-        .select()
+        .select();
 
       if (error) {
-        errors.push({ row, error })
+        errors.push({ row, error });
       } else {
-        inserted.push(...(data || []))
-        await admin.from('email_transactions')
+        inserted.push(...(data || []));
+        await admin
+          .from('email_transactions')
           .update({ processed: true })
-          .eq('id', row.id)
+          .eq('id', row.id);
       }
     }
 
