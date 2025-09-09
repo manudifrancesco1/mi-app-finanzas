@@ -95,12 +95,33 @@ const Dashboard: NextPage = () => {
     setEmailSyncLoading(true)
     setEmailSyncMsg(null)
     try {
-      const r = await fetch('/api/email/promote/trigger?limit=50', { method: 'POST' })
-      const data = await r.json().catch(() => ({}))
+      const r = await fetch('/api/email/promote/trigger', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ limit: 50 }),
+      })
+      const data = await r.json().catch(() => ({} as any))
       if (!r.ok) throw new Error(data?.error || 'Error')
-      const attempted = data?.attempted ?? 0
-      const inserted = Array.isArray(data?.inserted) ? data.inserted.length : (data?.inserted ?? 0)
-      setEmailSyncMsg(`Listo ✅ Intentados: ${attempted} — Insertados: ${inserted}`)
+
+      // El endpoint /api/email/promote/trigger devuelve { promote: {...} }
+      const promote = data?.promote ?? data ?? {}
+      const attempted =
+        typeof promote.attempted === 'number'
+          ? promote.attempted
+          : (typeof data?.attempted === 'number' ? data.attempted : 0)
+
+      const inserted =
+        typeof promote.insertedCount === 'number'
+          ? promote.insertedCount
+          : (Array.isArray(promote.inserted) ? promote.inserted.length
+             : (typeof data?.inserted === 'number' ? data.inserted : 0))
+
+      const errors =
+        typeof promote.errorsCount === 'number'
+          ? promote.errorsCount
+          : (Array.isArray(promote.errors) ? promote.errors.length : 0)
+
+      setEmailSyncMsg(`Listo ✅ Intentados: ${attempted} — Insertados: ${inserted} — Errores: ${errors}`)
     } catch (e: any) {
       setEmailSyncMsg(`Ups ❌ ${e?.message || 'Error'}`)
     } finally {
