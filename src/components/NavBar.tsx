@@ -7,7 +7,8 @@ import {
   ClipboardIcon,
   CurrencyDollarIcon,
   ChartBarIcon,
-  Cog6ToothIcon
+  Cog6ToothIcon,
+  EnvelopeIcon
 } from '@heroicons/react/24/outline'
 
 const tabs = [
@@ -16,7 +17,8 @@ const tabs = [
   { href: '/expenses',   label: 'Gastos',      Icon: ClipboardIcon },
   { href: '/incomes',    label: 'Ingresos',    Icon: CurrencyDollarIcon },
   { href: '/budgets',    label: 'Presupuestos',Icon: ChartBarIcon },
-  { href: '/settings',   label: 'Más',         Icon: Cog6ToothIcon }
+  { href: '/settings',   label: 'Más',         Icon: Cog6ToothIcon },
+  { href: '/emails',     label: 'Emails',      Icon: EnvelopeIcon }
 ]
 
 export default function NavBar() {
