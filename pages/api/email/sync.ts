@@ -1,6 +1,6 @@
 // pages/api/email/sync.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { ImapFlow } from 'imapflow'
+import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
@@ -153,10 +153,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await client.mailboxOpen('INBOX')
 
     const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
-    const criteria: any[] = [['SINCE', since]]
-    if (from) criteria.push(['FROM', from])
+    const searchQuery: SearchObject = { since }
+    if (from) {
+      searchQuery.from = from
+    }
 
-    const uids = await client.search(criteria)
+    const uids = await client.search(searchQuery)
     const msgs: any[] = []
     for await (const m of client.fetch(uids, { uid: true, envelope: true, source: true, internalDate: true })) {
       msgs.push(m)
