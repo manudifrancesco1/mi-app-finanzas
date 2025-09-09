@@ -2,9 +2,8 @@
 const isProd = process.env.NODE_ENV === 'production'
 const isVercel = Boolean(process.env.VERCEL) // true on Vercel builds
 
-// Behaviour:
-// - Vercel (any env) & local dev: SSR on, API routes enabled
-// - Non‑Vercel production (e.g., GitHub Pages): static export with basePath/assetPrefix
+// En Vercel y en dev local: NO static export → API habilitadas
+// Solo fuera de Vercel + prod: export estático (p/ GitHub Pages)
 const nextConfig = (!isVercel && isProd)
   ? {
       output: 'export',
