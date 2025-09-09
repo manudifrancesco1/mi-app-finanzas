@@ -26,6 +26,19 @@ const monthLabel = (ym: string) => {
   return label.charAt(0).toUpperCase() + label.slice(1);
 };
 
+const ymAddMonths = (ym: string, delta: number) => {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m - 1 + delta, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+const shortMonthLabel = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m - 1, 1)
+  const month = d.toLocaleString('es-AR', { month: 'short' })
+  return `${month.charAt(0).toUpperCase() + month.slice(1)} ${y}`
+}
+
 const Amount: React.FC<{ value: number; negative?: boolean; className?: string }> = ({
   value,
   negative,
@@ -63,6 +76,8 @@ const Dashboard: NextPage = () => {
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({})
   const [showExpenseModal, setShowExpenseModal] = useState(false)
   const [showIncomeModal, setShowIncomeModal] = useState(false)
+  const [prevBalances, setPrevBalances] = useState<{ ym: string; balance: number }[]>([])
+  const [ytdBalance, setYtdBalance] = useState(0)
 
   const toggleCategory = (name: string) =>
     setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
@@ -159,6 +174,110 @@ const Dashboard: NextPage = () => {
       const varArr   = toArr(variableMap).sort((a,b) => b.total - a.total); setVariableExpensesByCategory(varArr); setTotalVariableExpenses(varArr.reduce((s, x) => s + x.total, 0))
       const subCats: Record<string, CategoryAmount[]> = {}; Object.entries(subByCat).forEach(([c,m])=>subCats[c]=toArr(m).sort((a,b) => b.total - a.total)); setVariableSubcategoriesByCategory(subCats)
 
+      // --- Balances de meses anteriores y acumulado ---
+      const prev1 = ymAddMonths(selectedMonth, -1)
+      const prev2 = ymAddMonths(selectedMonth, -2)
+      const prev3 = ymAddMonths(selectedMonth, -3)
+
+      const rangeStartPrev3 = `${prev3.split('-')[0]}-${prev3.split('-')[1]}-01`
+      const endSelected = end // ya calculado arriba
+
+      // Traer ingresos del rango prev3..selected
+      const { data: incRange } = await supabase
+        .from('incomes')
+        .select('category:category_id(name), amount, date')
+        .eq('user_id', uid)
+        .gte('date', rangeStartPrev3)
+        .lte('date', endSelected)
+
+      // Traer gastos del rango prev3..selected
+      const { data: txRange } = await supabase
+        .from('transactions')
+        .select('category:category_id(name), subcategory:subcategory_id(name), amount, expense_mode, date')
+        .eq('user_id', uid)
+        .gte('date', rangeStartPrev3)
+        .lte('date', endSelected)
+
+      const monthsTarget = new Set([prev1, prev2, prev3])
+
+      // Acumuladores por mes (YYYY-MM)
+      const monthAgg: Record<string, { inc: number; devol: number; fix: number; vari: number }> = {}
+
+      const ymFromDate = (iso: string) => {
+        const [yy, mm] = iso.split('-')
+        return `${yy}-${mm}`
+      }
+
+      // Ingresos por mes (separando Devolución)
+      incRange?.forEach((i: any) => {
+        const ym = ymFromDate(i.date)
+        if (!monthsTarget.has(ym)) return
+        const cat = Array.isArray(i.category) ? i.category[0]?.name : i.category?.name
+        monthAgg[ym] = monthAgg[ym] || { inc: 0, devol: 0, fix: 0, vari: 0 }
+        if (cat === 'Devolución') monthAgg[ym].devol += i.amount
+        else monthAgg[ym].inc += i.amount
+      })
+
+      // Gastos por mes
+      txRange?.forEach((t: any) => {
+        const ym = ymFromDate(t.date)
+        if (!monthsTarget.has(ym)) return
+        const cat = Array.isArray(t.category) ? t.category[0]?.name : t.category?.name
+        monthAgg[ym] = monthAgg[ym] || { inc: 0, devol: 0, fix: 0, vari: 0 }
+        if (t.expense_mode === 'fixed') {
+          if (!EXCLUDED_FIXED.has(cat)) monthAgg[ym].fix += t.amount
+        } else {
+          monthAgg[ym].vari += t.amount
+        }
+      })
+
+      // Calcular balances para prev1, prev2, prev3
+      const computeBal = (ym: string) => {
+        const a = monthAgg[ym] || { inc: 0, devol: 0, fix: 0, vari: 0 }
+        const netVar = a.vari - a.devol
+        return (a.inc) - (a.fix + netVar)
+      }
+
+      const prevBalancesArr = [prev1, prev2, prev3]
+        .map(ym => ({ ym, balance: computeBal(ym) }))
+
+      setPrevBalances(prevBalancesArr)
+
+      // Acumulado del año (YTD) hasta el fin del mes seleccionado
+      const year = String(y)
+      const ytdStart = `${year}-01-01`
+
+      const { data: incYTD } = await supabase
+        .from('incomes')
+        .select('category:category_id(name), amount, date')
+        .eq('user_id', uid)
+        .gte('date', ytdStart)
+        .lte('date', endSelected)
+
+      const { data: txYTD } = await supabase
+        .from('transactions')
+        .select('category:category_id(name), amount, expense_mode, date')
+        .eq('user_id', uid)
+        .gte('date', ytdStart)
+        .lte('date', endSelected)
+
+      let incY = 0, devolY = 0, fixY = 0, variY = 0
+      incYTD?.forEach((i: any) => {
+        const cat = Array.isArray(i.category) ? i.category[0]?.name : i.category?.name
+        if (cat === 'Devolución') devolY += i.amount
+        else incY += i.amount
+      })
+      txYTD?.forEach((t: any) => {
+        const cat = Array.isArray(t.category) ? t.category[0]?.name : t.category?.name
+        if (t.expense_mode === 'fixed') {
+          if (!EXCLUDED_FIXED.has(cat)) fixY += t.amount
+        } else {
+          variY += t.amount
+        }
+      })
+      const netVarY = variY - devolY
+      setYtdBalance(incY - (fixY + netVarY))
+
       setLoadingData(false)
     }
     fetchData()
@@ -252,6 +371,20 @@ const Dashboard: NextPage = () => {
             <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
               <Amount value={balance} />
             </p>
+            <div className="mt-4 border-t pt-3 text-sm">
+              <ul className="space-y-1">
+                {prevBalances.map(({ ym, balance }) => (
+                  <li key={ym} className="flex justify-between">
+                    <span className="text-gray-500">{shortMonthLabel(ym)}</span>
+                    <Amount value={Math.abs(balance)} negative={balance < 0} />
+                  </li>
+                ))}
+                <li className="flex justify-between pt-1 border-t mt-2">
+                  <span className="font-medium">Acumulado {selectedMonth.split('-')[0]}</span>
+                  <Amount value={Math.abs(ytdBalance)} negative={ytdBalance < 0} />
+                </li>
+              </ul>
+            </div>
           </section>
 
           {/* Ingresos */}

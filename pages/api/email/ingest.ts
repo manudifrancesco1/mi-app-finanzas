@@ -1,191 +1,151 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { createClient } from '@supabase/supabase-js'
 
-// Utilidades de parsing muy simples para mails de VISA Galicia
-function normalizeAmount(raw: string): number | null {
-  if (!raw) return null
-  let s = raw.trim()
-  // Quitar símbolo de peso u otros
-  s = s.replace(/[$]/g, '').replace(/\s/g, '')
-  // Formatos posibles: "1.234,56" (AR/ES), "1234,56", "1234.56", "81.91"
-  const hasComma = s.includes(',')
-  const hasDot = s.includes('.')
-  if (hasComma && hasDot) {
-    // Asumimos miles con punto y decimales con coma => quitar puntos y convertir coma a punto
-    s = s.replace(/\./g, '').replace(/,/g, '.')
-  } else if (hasComma && !hasDot) {
-    // Solo coma => tratar como separador decimal
-    s = s.replace(/,/g, '.')
+type Parsed = {
+  amount?: number
+  currency?: string
+  merchant?: string
+  card_last4?: string
+  occurred_at?: string
+}
+
+function extractMerchant(text: string): string | undefined {
+  // Prefer explicit label "Comercio: XXX" (stop at hyphen, dot, comma or EOL)
+  const byLabel = /Comercio:\s*([^\n\r\.,-]+?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
+  if (byLabel?.[1]) return cleanupMerchant(byLabel[1])
+
+  // Common phrasing: "Compra en XXX" (stop at typical separators)
+  const compraEn = /Compra\s+en\s+([^\n\r\.,-]+?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
+  if (compraEn?.[1]) return cleanupMerchant(compraEn[1])
+
+  // Generic fallback: " en XXX" up to a separator
+  const genericEn = /\ben\s+([^\n\r\.,-]{3,}?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
+  if (genericEn?.[1]) return cleanupMerchant(genericEn[1])
+
+  return undefined
+}
+
+function cleanupMerchant(raw: string): string {
+  let s = raw
+    .replace(/^\s+|\s+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+
+  // Remove leading verbs/labels like "COMPRA EN"
+  s = s.replace(/^(COMPRA|PAGO|CONSUMO)\s+EN\s+/i, '')
+
+  // Cut at common trailing labels if they leaked in
+  s = s.replace(/\b(MONEDA|ARS|AR\$|PESOS?)\b.*$/i, '')
+
+  return s.trim().toUpperCase()
+}
+
+function parseEmail(subject: string, body: string, dateIso?: string): Parsed {
+  const text = `${subject} ${body}`
+
+  // Parse amount ($1.234,56 or 1234.56)
+  const montoMatch =
+    text.match(/(?:\$|\b)(\d{1,3}(?:\.\d{3})*,\d{2})/) ||
+    text.match(/(?:\$|\b)(\d+(?:\.\d+)?)/)
+  let amount: number | undefined
+  if (montoMatch) {
+    const raw = montoMatch[1]
+    amount = raw.includes(',')
+      ? Number(raw.replace(/\./g, '').replace(',', '.'))
+      : Number(raw)
   }
-  const n = Number.parseFloat(s)
-  return Number.isFinite(n) ? n : null
+
+  const currency =
+    /ARS|USD|EUR/.exec(text)?.[0] ||
+    (text.includes('$') ? 'ARS' : undefined)
+
+  let merchant: string | undefined = extractMerchant(subject) || extractMerchant(body) || extractMerchant(text)
+
+  const last4Match =
+    /terminación\s*(\d{4})/i.exec(text) ||
+    /(\d{4})\b(?!.*\d)/.exec(text)
+  const card_last4 = last4Match?.[1]
+
+  const occurred_at = dateIso
+
+  return { amount, currency, merchant, card_last4, occurred_at }
 }
 
-function extractLast4(text: string): string | null {
-  if (!text) return null
-  // "terminación 1234" o "****1234" o "*** 1234"
-  const m = text.match(/terminaci[oó]n\s*(\d{4})/i) || text.match(/\*{2,}\s*(\d{4})/)
-  return m ? (m[1] ?? '').trim() : null
+function hashPayload(subject: string, body: string, date?: string) {
+  return crypto
+    .createHash('sha256')
+    .update([subject || '', body || '', date || ''].join('|'))
+    .digest('hex')
 }
-
-function extractMerchant(subject: string, body: string): string | null {
-  const blob = `${subject}\n${body}`
-  // Prioridad 1: línea "Comercio: XXXX"
-  const m1 = blob.match(/Comercio:\s*([^\n]+)/i)
-  if (m1) return m1[1].trim()
-  // Prioridad 2: "en TIENDA XYZ" en el subject o cuerpo
-  const m2 = blob.match(/\ben\s+([^\n\-–—]+?)(?:\s+por|\s+-\s+|[\.;,]|$)/i)
-  if (m2) return m2[1].trim()
-  return null
-}
-
-function extractCurrency(subject: string, body: string): string | null {
-  const blob = `${subject}\n${body}`
-  // "Moneda: ARS"
-  const m1 = blob.match(/Moneda:\s*([A-Z]{3})/i)
-  if (m1) return m1[1].toUpperCase()
-  // Si aparece un símbolo $
-  if (/[\$]/.test(blob)) return 'ARS'
-  return null
-}
-
-function extractAmount(subject: string, body: string): number | null {
-  const blob = `${subject}\n${body}`
-  // "Monto: 81.91" o "Monto: 1.234,56"
-  const m1 = blob.match(/Monto:\s*([\$]?[\d\.,]+)/i)
-  if (m1) return normalizeAmount(m1[1])
-  // Buscar monto con símbolo $ en el subject
-  const m2 = blob.match(/\$\s*([\d\.,]+)/)
-  if (m2) return normalizeAmount(m2[1])
-  return null
-}
-
-// --- Supabase admin client (server-side) ---
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL as string
-const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-const supabaseAdmin = (SUPABASE_URL && SERVICE_ROLE)
-  ? createClient(SUPABASE_URL, SERVICE_ROLE)
-  : null
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Solo permitimos POST
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST')
     return res.status(405).json({ ok: false, error: 'Method Not Allowed' })
   }
 
-  // Autenticación simple por encabezado
   const secret = req.headers['x-email-secret']
-  if (secret !== process.env.EMAIL_INGEST_SECRET) {
-    return res.status(401).json({ ok: false, error: 'Unauthorized' })
+  if (!secret || secret !== process.env.EMAIL_INGEST_SECRET) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' })
   }
 
-  // Tomamos algunos campos típicos de un email
-  const { user_id, subject = '', body = '', date } = (req.body ?? {}) as {
-    user_id?: string
-    subject?: string
-    body?: string
-    date?: string
-  }
-
-  // Parseo básico
-  const parsed = {
-    amount: extractAmount(subject, body),
-    currency: extractCurrency(subject, body) ?? 'ARS',
-    merchant: extractMerchant(subject, body),
-    card_last4: extractLast4(subject + '\n' + body),
-    occurred_at: date ?? new Date().toISOString(),
-  }
-
-  // --- Optional: insertar transacción automática en Supabase ---
-  let insertResult: any = null
-  let insertError: string | null = null
-
-  // Deducción simple del tipo de pago: crédito (default) vs débito si el mail lo indica
-  const paymentType = /d[eé]bito/i.test(subject + ' ' + body) ? 'debit' : 'credit'
-
-  // La columna `date` en tu tabla es tipo DATE; guardamos sólo AAAA-MM-DD
-  const txDate = new Date(parsed.occurred_at).toISOString().slice(0, 10)
-
-  // ---- Idempotencia: hash de deduplicación (mismo user, monto, fecha, comercio y last4) ----
-  const canonicalMerchant = (parsed.merchant || '').trim().toLowerCase();
-  const last4 = parsed.card_last4 || '';
-  const amountStr = parsed.amount !== null && parsed.amount !== undefined ? parsed.amount.toFixed(2) : '';
-  const dedupeKey = [user_id || '', amountStr, txDate, canonicalMerchant, last4].join('|');
-  const hash = crypto.createHash('sha256').update(dedupeKey).digest('hex').slice(0, 32);
-
-  // Descripción amigable para la transacción (fallback al subject)
-  const description = (() => {
-    const last4 = parsed.card_last4 ? ` (VISA ****${parsed.card_last4})` : ''
-    if (parsed.merchant) return `Compra ${parsed.merchant}${last4}`
-    if (subject) return subject
-    return `Compra con tarjeta${last4}`
-  })()
-
-  if (supabaseAdmin && user_id && parsed.amount) {
-    const tags: string[] = []
-    if (parsed.card_last4) tags.push(`visa-${parsed.card_last4}`)
-
-    const row = {
-      user_id,                    // uuid del usuario dueño del gasto
-      amount: parsed.amount,      // numeric
-      currency: parsed.currency,  // text (ej: ARS)
-      date: txDate,               // date (AAAA-MM-DD)
-      description,                // text
-      payment_type: paymentType,  // text: 'credit' | 'debit'
-      expense_mode: 'single',     // text: un solo pago
-
-      // Nuevo: guardar el comercio y la fuente del dato
-      merchant: parsed.merchant ?? null,
-      source: 'email',
-      raw_description: subject || null,
-
-      // Campos opcionales que tu esquema permite; dejamos en null si no aplica
-      category_id: null,
-      subcategory_id: null,
-      payment_method_id: null,
-      installments_total: null,
-      installments_paid: null,
-      installments: null,
-      recurrence: null,
-      tags,
-      hash,
+  try {
+    const { subject = '', body = '', date, user_id } = (req.body || {}) as {
+      subject?: string
+      body?: string
+      date?: string
+      user_id?: string
     }
 
-    try {
-      const { data, error } = await supabaseAdmin
-        .from('transactions')
-        .upsert(row, { onConflict: 'hash' })
-        .select()
-        .single()
+    const parsed = parseEmail(subject, body, date)
 
-      if (error) {
-        insertError = error.message
-      } else {
-        insertResult = data
+    // Optional DB upsert into staging `email_transactions`
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    let db = { attempted: false, inserted: null as any, error: null as any }
+
+    if (supabaseUrl && serviceKey && user_id) {
+      db.attempted = true
+      try {
+        const admin = createClient(supabaseUrl, serviceKey)
+        const hash = hashPayload(subject, body, parsed.occurred_at)
+
+        const payload = {
+          user_id,
+          hash,
+          subject,
+          body,
+          email_datetime: parsed.occurred_at || new Date().toISOString(),
+          date_local: parsed.occurred_at ? parsed.occurred_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          merchant: parsed.merchant || null,
+          city: null,
+          amount: parsed.amount ?? null,
+          currency: parsed.currency || 'ARS',
+          card_last4: parsed.card_last4 || null,
+          source: 'Email',
+          description: parsed.merchant ? `${parsed.merchant}${parsed.card_last4 ? ` (****${parsed.card_last4})` : ''}` : subject,
+          tags: 'visa_alert',
+          processed: false,
+        }
+
+        // Ensure table exists on your DB. Expected unique index on `hash`.
+        const { data, error } = await admin
+          .from('email_transactions')
+          .upsert(payload, { onConflict: 'hash' })
+          .select()
+
+        if (error) {
+          db.error = error.message
+        } else {
+          db.inserted = data
+        }
+      } catch (e: any) {
+        db.error = e?.message || String(e)
       }
-    } catch (e: any) {
-      insertError = e?.message || 'unknown insert error'
     }
+
+    return res.status(200).json({ ok: true, received: { subject, date, hasBody: Boolean(body), user_id: user_id || null }, parsed, db })
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: e?.message || 'ingest failed' })
   }
-
-  // Log útil para depurar en consola del server
-  console.log('[EMAIL_INGEST] Parsed =>', parsed)
-
-  return res.status(200).json({
-    ok: true,
-    received: {
-      hasUserId: Boolean(user_id),
-      subject: subject || null,
-      bodyLength: body ? body.length : 0,
-      date: date ?? null,
-    },
-    parsed,
-    db: {
-      attempted: Boolean(supabaseAdmin && user_id && parsed.amount),
-      error: insertError,
-      inserted: insertResult,
-    },
-  })
 }
