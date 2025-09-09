@@ -1,9 +1,13 @@
 // pages/api/email/sync.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { ImapFlow, type SearchObject } from 'imapflow'
-import { simpleParser } from 'mailparser'
+// Use require with a typed shape to avoid TS errors if @types/mailparser are missing locally
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { simpleParser } = require('mailparser') as {
+  simpleParser: (src: any) => Promise<{ subject?: string; text?: string; html?: string; messageId?: string }>
+}
 import crypto from 'crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 type Parsed = {
   amount?: number
@@ -78,7 +82,7 @@ function parseEmail(subject: string, body: string, dateIso?: string): Parsed {
   return { amount, currency, merchant, card_last4, occurred_at }
 }
 async function ingestOne(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   user_id: string,
   subject: string,
   body: string,
@@ -159,8 +163,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const uids = await client.search(searchQuery)
+    const seq = Array.isArray(uids) ? uids : []
+    if (seq.length === 0) {
+      return res.status(200).json(out)
+    }
+
     const msgs: any[] = []
-    for await (const m of client.fetch(uids, { uid: true, envelope: true, source: true, internalDate: true })) {
+    for await (const m of client.fetch(seq, { uid: true, envelope: true, source: true, internalDate: true })) {
       msgs.push(m)
     }
 
