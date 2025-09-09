@@ -5,29 +5,24 @@ export default async function trigger(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') {
     return res.status(405).json({ ok: false, error: 'Method not allowed' })
   }
-
   try {
-    const limit = Number(req.query.limit ?? 50) || 50
-    const secret = process.env.EMAIL_INGEST_SECRET
-    if (!secret) return res.status(500).json({ ok: false, error: 'Missing EMAIL_INGEST_SECRET' })
-
-    // URL interna del deployment actual
-    const base =
+    const baseUrl =
       process.env.VERCEL_URL
         ? `https://${process.env.VERCEL_URL}`
-        : `http://localhost:${process.env.PORT || 3000}`
+        : process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
 
-    const r = await fetch(`${base}/api/email/promote?limit=${limit}`, {
+    const r = await fetch(`${baseUrl}/api/email/promote?limit=${encodeURIComponent(String(req.query.limit ?? '50'))}`, {
       method: 'POST',
       headers: {
-        'x-email-secret': secret,
+        'x-email-secret': process.env.EMAIL_INGEST_SECRET || '',
         'content-type': 'application/json',
       },
     })
 
-    const data = await r.json().catch(() => ({}))
-    return res.status(r.status).json(data)
+    const json = await r.json().catch(() => ({}))
+    return res.status(r.status).json(json)
   } catch (e: any) {
-    return res.status(500).json({ ok: false, error: e?.message || 'Unknown error' })
+    console.error(e)
+    return res.status(500).json({ ok: false, error: e.message })
   }
 }
