@@ -1,10 +1,10 @@
-/** @type {import('next').NextConfig} */
+/ ** @type {import('next').NextConfig} */
 const isProd = process.env.NODE_ENV === 'production'
 const isVercel = Boolean(process.env.VERCEL) // true on Vercel builds
 
-// En Vercel y en dev local: NO static export → API habilitadas
-// Solo fuera de Vercel + prod: export estático (p/ GitHub Pages)
-const nextConfig = (!isVercel && isProd)
+// En Vercel: nunca usar export, porque rompe API routes
+// En prod fuera de Vercel (ej. GitHub Pages): usar export
+const nextConfig = (isProd && !isVercel)
   ? {
       output: 'export',
       images: { unoptimized: true },
@@ -13,6 +13,7 @@ const nextConfig = (!isVercel && isProd)
     }
   : {
       reactStrictMode: true,
+      swcMinify: true,
     }
 
 module.exports = nextConfig
