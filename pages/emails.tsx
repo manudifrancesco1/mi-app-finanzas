@@ -1,42 +1,48 @@
-import React, { useState } from 'react';
+import type { NextApiRequest, NextApiResponse } from 'next'
 
-const EmailsPage = () => {
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ ok: false, error: 'Method not allowed' })
+  }
+  return res.status(200).json({ ok: true, test: 'promote-alive' })
+}
 
-  const handleClick = async () => {
-    setLoading(true);
-    setResult(null);
+import { useState } from 'react'
+
+export default function EmailsPage() {
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+
+  const handleReadEmails = async () => {
     try {
-      const response = await fetch('/api/email/promote/trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      const data = await response.json();
-      setResult(data);
-    } catch (err) {
-      if (err instanceof Error) {
-        setResult({ error: err.message });
-      } else {
-        setResult({ error: String(err) });
-      }
+      setLoading(true)
+      setResult(null)
+      const res = await fetch('/api/email/promote/trigger', { method: 'POST' })
+      const data = await res.json()
+      setResult(JSON.stringify(data, null, 2))
+    } catch (e: any) {
+      setResult(`Error: ${e?.message || 'unknown error'}`)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false);
-  };
+  }
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <h1>Emails</h1>
-      <button onClick={handleClick} disabled={loading}>
-        {loading ? 'Cargando...' : 'Leer emails'}
+    <div className="p-4">
+      <h1 className="text-xl font-semibold mb-4">Emails</h1>
+      <button
+        onClick={handleReadEmails}
+        className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
+        disabled={loading}
+      >
+        {loading ? 'Leyendo…' : 'Leer emails'}
       </button>
+
       {result && (
-        <pre style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}>
-          {JSON.stringify(result, null, 2)}
+        <pre className="mt-4 p-3 bg-gray-100 rounded text-sm overflow-auto">
+          {result}
         </pre>
       )}
     </div>
-  );
-};
-
-export default EmailsPage;
+  )
+}
