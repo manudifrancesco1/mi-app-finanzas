@@ -1,8 +1,5 @@
 {
   "crons": [
-    {
-      "path": "/api/email/promote",
-      "schedule": "*/10 * * * *"
-    }
+    { "path": "/api/email/promote", "schedule": "*/10 * * * *" }
   ]
 }
