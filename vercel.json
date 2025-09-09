@@ -1,6 +1,6 @@
 {
   "buildCommand": "next build",
   "crons": [
-    { "path": "/api/email/promote", "schedule": "0 */6 * * *" }
+    { "path": "/api/email/promote", "schedule": "0 11 * * *" }
   ]
 }
