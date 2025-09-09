@@ -10,15 +10,16 @@ const EmailsPage = () => {
     try {
       const response = await fetch('/api/email/promote/trigger', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-email-secret': 'email_ingest_12345',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
       const data = await response.json();
       setResult(data);
-    } catch (error) {
-      setResult({ error: error.message });
+    } catch (err) {
+      if (err instanceof Error) {
+        setResult({ error: err.message });
+      } else {
+        setResult({ error: String(err) });
+      }
     }
     setLoading(false);
   };
