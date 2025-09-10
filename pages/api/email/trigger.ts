@@ -1,9 +1,9 @@
 // pages/api/email/trigger.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 
-const TIMEOUT_MS = 20000
+const TIMEOUT_MS = Number(process.env.EMAIL_TRIGGER_TIMEOUT_MS || 25000)
 
-function withTimeout<T>(p: Promise<T>, ms = TIMEOUT_MS, label = 'operation'): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number = TIMEOUT_MS, label = 'operation'): Promise<T> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms)
     p.then((v) => { clearTimeout(t); resolve(v) }).catch((e) => { clearTimeout(t); reject(e) })
@@ -24,7 +24,7 @@ function withTimeout<T>(p: Promise<T>, ms = TIMEOUT_MS, label = 'operation'): Pr
  * }
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' })
+  if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' })
 
   const secret = process.env.EMAIL_INGEST_SECRET
   if (!secret) return res.status(500).json({ ok: false, error: 'Missing EMAIL_INGEST_SECRET' })
@@ -39,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!user_id) return res.status(400).json({ ok: false, error: 'missing user_id (or set DEFAULT_USER_ID)' })
 
   // Origin del mismo deploy (soporta Vercel/localhost)
-  const proto = (req.headers['x-forwarded-proto'] as string) || 'http'
+  const proto = (req.headers['x-forwarded-proto'] as string) || 'https'
   const host = req.headers.host
   const origin = `${proto}://${host}`
 
@@ -68,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!syncResp.ok) return res.status(syncResp.status).json({ ok: false, ...out })
 
     // 2) PROMOTE con timeout (más corto)
-    const promoteReq = fetch(`${origin}/api/email/promote`, {
+    const promoteReq = fetch(`${origin}/api/email/promote?limit=${encodeURIComponent(String(limit))}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-email-secret': secret },
     })
@@ -85,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const promoteJson = await promoteResp.json().catch(() => ({}))
     out.promote = { status: promoteResp.status, ...promoteJson }
 
-    return res.status(promoteResp.status).json(out)
+    return res.status(200).json(out)
   } catch (e: any) {
     console.error('[email/trigger] fatal', e)
     out.error = e?.message || String(e)
