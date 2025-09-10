@@ -72,6 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || '').trim()
   const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || '').trim()
   const fromFilter = (from && String(from).trim()) || fromFilterEnv
+  const defaultCurrency = (process.env.EMAIL_SYNC_DEFAULT_CURRENCY || 'ARS').trim()
 
   const out: Out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] }
   const debug = {
@@ -168,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             processed: false,
             merchant: null,
             amount: null,
-            currency: null,
+            currency: defaultCurrency,
             card_last4: null,
             date_local,
             hash,
