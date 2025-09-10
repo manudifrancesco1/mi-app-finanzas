@@ -1,169 +1,89 @@
 // pages/api/email/sync.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { ImapFlow, type SearchObject } from 'imapflow'
-// Use require with a typed shape to avoid TS errors if @types/mailparser are missing locally
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { simpleParser } = require('mailparser') as {
-  simpleParser: (src: any) => Promise<{ subject?: string; text?: string; html?: string; messageId?: string }>
-}
-import crypto from 'crypto'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { simpleParser } from 'mailparser'
+import { createClient } from '@supabase/supabase-js'
 
-type Parsed = {
-  amount?: number
-  currency?: string
-  merchant?: string
-  card_last4?: string
-  occurred_at?: string
-}
-
-function extractMerchant(text: string): string | undefined {
-  const byLabel = /Comercio:\s*([^\n\r\.,-]+?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
-  if (byLabel?.[1]) return cleanupMerchant(byLabel[1])
-  const compraEn = /Compra\s+en\s+([^\n\r\.,-]+?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
-  if (compraEn?.[1]) return cleanupMerchant(compraEn[1])
-  const genericEn = /\ben\s+([^\n\r\.,-]{3,}?)(?=\s*-|[\.,\n\r]|$)/i.exec(text)
-  if (genericEn?.[1]) return cleanupMerchant(genericEn[1])
-  return undefined
-}
-function cleanupMerchant(raw: string): string {
-  let s = raw.trim().replace(/\s{2,}/g, ' ')
-  s = s.replace(/^(COMPRA|PAGO|CONSUMO)\s+EN\s+/i, '')
-  s = s.replace(/\b(MONEDA|ARS|AR\$|PESOS?)\b.*$/i, '')
-  return s.trim().toUpperCase()
-}
-function parseEmail(subject: string, body: string, dateIso?: string): Parsed {
-  const text = `${subject} ${body}`
-
-  // 1) Patrones "fuertes": Monto/Importe + número (con o sin $) + opcional código moneda
-  const strongAmount =
-    /(?:Monto|Importe)\s*:?\s*\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2})\s*(?:ARS|USD|EUR)?/i.exec(text) ||
-    /(?:Monto|Importe)\s*:?\s*\$?\s*(\d+(?:\.\d+)?)(?:\s*(ARS|USD|EUR))?/i.exec(text)
-
-  // 2) Patrones por código de moneda en contexto
-  const currencyAmount =
-    /(ARS|USD|EUR)\s*\$?\s*(\d{1,3}(?:\.\d{3})*,\d{2})/i.exec(text) ||
-    /(ARS|USD|EUR)\s*\$?\s*(\d+(?:\.\d+)?)/i.exec(text)
-
-  // 3) Patrones con símbolo $
-  const symbolAmount =
-    /\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})/i.exec(text) ||
-    /\$\s*(\d+(?:\.\d+)?)/i.exec(text)
-
-  let amount: number | undefined
-
-  const picked =
-    strongAmount ??
-    (currencyAmount && (currencyAmount[2] ? ({ 1: currencyAmount[2] } as any) : null)) ??
-    symbolAmount
-
-  if (picked) {
-    const raw = picked[1]
-    amount = raw.includes(',')
-      ? Number(raw.replace(/\./g, '').replace(',', '.'))
-      : Number(raw)
-  }
-
-  // moneda: priorizar explícita, si no, inferir
-  const currency =
-    /ARS|USD|EUR/i.exec(text)?.[0]?.toUpperCase() ||
-    (/\$/.test(text) ? 'ARS' : undefined)
-
-  const merchant =
-    extractMerchant(subject) || extractMerchant(body) || extractMerchant(text)
-
-  const last4Match =
-    /terminación\s*(\d{4})/i.exec(text) ||
-    /(\d{4})\b(?!.*\d)/.exec(text)
-  const card_last4 = last4Match?.[1]
-
-  const occurred_at = dateIso
-
-  return { amount, currency, merchant, card_last4, occurred_at }
-}
-async function ingestOne(
-  admin: SupabaseClient,
-  user_id: string,
-  subject: string,
-  body: string,
-  date: Date,
-  messageId?: string
-) {
-  const parsed = parseEmail(subject, body, date.toISOString())
-  // incluir messageId en el hash si está disponible para dedupe más robusto
-  const hash = crypto.createHash('sha256')
-    .update([subject || '', body || '', parsed.occurred_at || '', messageId || ''].join('|'))
-    .digest('hex')
-
-  const payload = {
-    user_id,
-    hash,
-    subject,
-    body,
-    email_datetime: parsed.occurred_at || new Date().toISOString(),
-    date_local: (parsed.occurred_at || new Date().toISOString()).slice(0, 10),
-    merchant: parsed.merchant || null,
-    city: null,
-    amount: parsed.amount ?? null,
-    currency: parsed.currency || 'ARS',
-    card_last4: parsed.card_last4 || null,
-    source: 'Email',
-    description: parsed.merchant ? `${parsed.merchant}${parsed.card_last4 ? ` (****${parsed.card_last4})` : ''}` : subject,
-    tags: 'visa_alert',
-    processed: false,
-  }
-  const { data, error } = await admin.from('email_transactions').upsert(payload, { onConflict: 'hash' }).select()
-  if (error) throw new Error(error.message)
-  return data
-}
-function stripHtml(html: string) {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+type Out = {
+  ok: boolean
+  attempted: number
+  inserted: number
+  errors: number
+  details: any[]
 }
 
 function missingEnv(keys: string[]) {
   return keys.filter((k) => !process.env[k] || String(process.env[k]).trim() === '')
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' })
+function stripHtml(html: string) {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
 
-  const secret = req.headers['x-email-secret'] || req.headers['x-email-sync-secret']
-  if (!secret || secret !== process.env.EMAIL_INGEST_SECRET) {
-    return res.status(401).json({ ok: false, error: 'unauthorized' })
+const normalize = (s: string) =>
+  s ? s.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/\s+/g, ' ') : ''
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Out | any>) {
+  if (req.method !== 'POST') return res.status(405).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'Method Not Allowed' }] })
+
+  // Secret header (avoid public abuse)
+  const secret = req.headers['x-email-secret']
+  const expected = process.env.EMAIL_INGEST_SECRET
+  if (!expected || secret !== expected) {
+    return res.status(401).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'Unauthorized' }] })
   }
 
-  const { user_id = process.env.DEFAULT_USER_ID, limit = 50, from = process.env.EMAIL_SYNC_FROM || '', days = 14 } =
-    (req.body || {}) as { user_id?: string; limit?: number; from?: string; days?: number }
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !serviceKey) return res.status(500).json({ ok: false, error: 'missing supabase env' })
-  if (!user_id) return res.status(400).json({ ok: false, error: 'missing user_id' })
-
-  const missingImap = missingEnv(['IMAP_HOST', 'IMAP_PORT', 'IMAP_USER', 'IMAP_PASSWORD'])
-  if (missingImap.length) {
-    return res.status(500).json({ ok: false, error: `missing imap env: ${missingImap.join(', ')}` })
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+  const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+  if (!supabaseUrl || !serviceKey) {
+    return res.status(500).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'missing supabase env' }] })
   }
 
   const admin = createClient(supabaseUrl, serviceKey)
-  const client = new ImapFlow({
-    host: process.env.IMAP_HOST!,
-    port: Number(process.env.IMAP_PORT || 993),
-    secure: String(process.env.IMAP_SECURE || 'true') === 'true',
-    auth: { user: process.env.IMAP_USER!, pass: process.env.IMAP_PASSWORD! },
-    logger: false,
-  })
 
-  const out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] as any[] }
+  const { user_id: bodyUserId, limit = 50, days = 14, from } = (req.body ?? {}) as {
+    user_id?: string
+    limit?: number
+    days?: number
+    from?: string
+  }
+  const user_id = bodyUserId || process.env.DEFAULT_USER_ID
+  if (!user_id) return res.status(400).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'missing user_id' }] })
 
-  // Optional filters to narrow which emails are ingested
+  // IMAP envs
+  const missingImap = missingEnv(['IMAP_HOST', 'IMAP_PORT', 'IMAP_USER', 'IMAP_PASSWORD'])
+  if (missingImap.length) {
+    return res.status(500).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: `missing imap env: ${missingImap.join(', ')}` }] })
+  }
+  const IMAP_HOST = String(process.env.IMAP_HOST)
+  const IMAP_PORT = Number(process.env.IMAP_PORT)
+  const IMAP_SECURE = String(process.env.IMAP_SECURE || 'true').toLowerCase() === 'true'
+  const IMAP_USER = String(process.env.IMAP_USER)
+  const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD)
+
+  // Filters (permissive)
   const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || '').trim()
   const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || '').trim()
+  const fromFilter = (from && String(from).trim()) || fromFilterEnv
+
+  const out: Out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] }
+  const debug = {
+    scanned: 0,
+    matchedFrom: 0,
+    matchedSubject: 0,
+    skippedNoFromMatch: 0,
+    skippedNoSubjectMatch: 0,
+    skippedFwdRe: 0,
+    examples: [] as { subject: string; fromName?: string; fromAddr?: string }[],
+    filters: { fromFilter: fromFilter || null, subjectPrefix: subjectPrefix || null }
+  }
+
+  const client = new ImapFlow({
+    host: IMAP_HOST,
+    port: IMAP_PORT,
+    secure: IMAP_SECURE,
+    auth: { user: IMAP_USER, pass: IMAP_PASSWORD }
+  })
 
   try {
     await client.connect()
@@ -171,62 +91,94 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
     const searchQuery: SearchObject = { since }
-    // Prefer body-provided "from", otherwise env var
-    const fromSearch = (from && String(from).trim()) || fromFilterEnv
-    if (fromSearch) {
-      searchQuery.from = fromSearch
-    }
+    // IMPORTANTE: No filtramos por "from" aquí (suele fallar por address exacto). Filtramos luego del parse.
 
     const uids = await client.search(searchQuery)
-    const seq = Array.isArray(uids) ? uids : []
-    if (seq.length === 0) {
+    if (!uids?.length) {
+      out.details.push({ _summary: { ...debug, info: 'no uids for date range' } })
       return res.status(200).json(out)
     }
 
-    const msgs: any[] = []
-    for await (const m of client.fetch(seq, { uid: true, envelope: true, source: true, internalDate: true })) {
-      msgs.push(m)
-    }
+    // Tomar los más recientes primero
+    const take = Math.min(Number(limit), uids.length)
+    const slice = uids.slice(-take).reverse() // recent first
 
-    msgs.sort((a, b) => (b.internalDate?.getTime?.() || 0) - (a.internalDate?.getTime?.() || 0))
-    const selected = msgs.slice(0, Number(limit))
-
-    for (const m of selected) {
-      // Envelope-based sender filtering (defensive, in addition to IMAP search)
-      const envelopeFromName = (m.envelope?.from?.[0]?.name as string | undefined) || ''
-      const envelopeFromAddr = (m.envelope?.from?.[0]?.address as string | undefined) || ''
-      if (fromFilterEnv) {
-        const haystack = `${envelopeFromName} <${envelopeFromAddr}>`
-        if (!haystack.toLowerCase().includes(fromFilterEnv.toLowerCase())) {
-          // Skip if it does not match the expected sender text
-          continue
-        }
-      }
+    for (const uid of slice) {
       try {
-        const parsedMail = await simpleParser(m.source as Buffer)
-        const subject = parsedMail.subject || ''
-        // Skip forwards/replies or non-matching prefixes
-        if (/^\s*(fwd:|re:)/i.test(subject)) {
+        debug.scanned++
+        const msg = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
+        if (!msg?.source) continue
+
+        const parsed = await simpleParser(msg.source as Buffer)
+        const subject = parsed.subject || ''
+        if (/^\s*(fwd:|re:)/i.test(subject)) { debug.skippedFwdRe++; continue }
+
+        const fromName = (parsed.from?.value?.[0]?.name as string | undefined) || (msg.envelope?.from?.[0]?.name as string | undefined) || ''
+        const fromAddr = (parsed.from?.value?.[0]?.address as string | undefined) || (msg.envelope?.from?.[0]?.address as string | undefined) || ''
+
+        // From filter (includes, normalized)
+        let fromOk = true
+        if (fromFilter) {
+          const hay = normalize(`${fromName} <${fromAddr}>`)
+          fromOk = hay.includes(normalize(fromFilter))
+        }
+        if (!fromOk) {
+          debug.skippedNoFromMatch++
+          if (debug.examples.length < 10) debug.examples.push({ subject, fromName, fromAddr })
           continue
         }
-        if (subjectPrefix && !subject.startsWith(subjectPrefix)) {
+        debug.matchedFrom++
+
+        // Subject filter (includes, normalized)
+        const subjectOk = subjectPrefix ? normalize(subject).includes(normalize(subjectPrefix)) : true
+        if (!subjectOk) {
+          debug.skippedNoSubjectMatch++
+          if (debug.examples.length < 10) debug.examples.push({ subject, fromName, fromAddr })
           continue
         }
-        const body = (parsedMail.text || '').trim() || (parsedMail.html ? stripHtml(parsedMail.html) : '')
-        await ingestOne(admin, user_id, subject, body, m.internalDate || new Date(), parsedMail.messageId || undefined)
+        debug.matchedSubject++
+
+        const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
+        const email_datetime = (msg.internalDate || new Date()).toISOString()
+
+        // Insert minimal row; parser de merchant/amount quedará en promote o parsers específicos
+        const { error } = await admin
+          .from('email_transactions')
+          .insert([{
+            user_id,
+            subject,
+            email_datetime,
+            source: 'imap',
+            processed: false,
+            // opcionales - dejar nulos si no se extraen
+            merchant: null,
+            amount: null,
+            currency: null,
+            card_last4: null,
+            date_local: null,
+            // guardar parte del body por trazabilidad si querés (opcional):
+            // raw_excerpt: body.slice(0, 500)
+          }])
+
         out.attempted++
-        out.inserted++
+        if (error) {
+          out.errors++
+          out.details.push({ uid, subject, error: error.message })
+        } else {
+          out.inserted++
+        }
       } catch (e: any) {
         out.attempted++
         out.errors++
-        out.details.push({ uid: m.uid, error: e?.message || String(e) })
+        out.details.push({ error: e?.message || String(e) })
       }
     }
 
+    out.details.push({ _summary: debug })
     return res.status(200).json(out)
   } catch (e: any) {
     console.error('[email/sync] Fatal error:', e)
-    return res.status(500).json({ ok: false, error: e?.message || String(e) })
+    return res.status(500).json({ ok: false, attempted: out.attempted, inserted: out.inserted, errors: out.errors + 1, details: [{ error: e?.message || String(e) }] })
   } finally {
     try { await client.logout() } catch {}
   }
