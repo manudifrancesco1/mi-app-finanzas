@@ -22,6 +22,7 @@ export default function EmailsPage() {
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   // proteger por login
   useEffect(() => {
@@ -53,6 +54,7 @@ export default function EmailsPage() {
 
       if (error) throw error
       setRows(data || [])
+      setLastUpdated(new Date())
     } catch (e: any) {
       setMsg(`Error cargando emails: ${e?.message || String(e)}`)
     } finally {
@@ -107,12 +109,18 @@ export default function EmailsPage() {
             onClick={load}
             disabled={loading}
             className="px-3 py-2 rounded bg-gray-200 text-sm"
-            title="Refrescar lista"
+            title="Actualizar lista"
           >
-            {loading ? 'Cargando…' : 'Refrescar'}
+            {loading ? 'Cargando…' : 'Actualizar'}
           </button>
         </div>
       </header>
+
+      {lastUpdated && (
+        <div className="mb-2 text-xs text-gray-500">
+          Última actualización: {lastUpdated.toLocaleTimeString('es-AR', { hour12: false })}
+        </div>
+      )}
 
       {msg && <div className="mb-3 text-sm text-gray-700">{msg}</div>}
 
