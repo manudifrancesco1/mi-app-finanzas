@@ -108,11 +108,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(200).json(out)
     }
 
-    // Tomar los más recientes primero
+    // Recorrer de más reciente a más antiguo, intentando upsert hasta alcanzar "limit" verdaderos (post-filtro)
     const take = Math.min(Number(limit), uids.length)
-    const slice = uids.slice(-take).reverse() // recent first
+    const rev = [...uids].reverse() // recent first
 
-    for (const uid of slice) {
+    for (const uid of rev) {
+      if (out.attempted >= take) break
       try {
         debug.scanned++
         const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
@@ -147,8 +148,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         }
         debug.matchedSubject++
 
-        const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
-
         // Fechas
         const internal = msg.internalDate ? new Date(msg.internalDate) : new Date()
         const email_datetime = internal.toISOString()
@@ -161,7 +160,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const imap_uid = Number(uid)
 
         // Elegimos objetivo de conflicto: si hay Message-ID lo usamos, sino caemos a UID
-        const conflictTarget =
+        const conflictTarget: string =
           messageId && messageId.trim() ? 'user_id,message_id' : 'user_id,provider,imap_mailbox,imap_uid'
 
         // hash requerido por el esquema actual (aunque deduplicamos por UID)
@@ -195,13 +194,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             card_last4: null,
             hash,
           }], { onConflict: conflictTarget, ignoreDuplicates: true })
-
         out.attempted++
+
         if (error) {
-          // If duplicate (unique violation on hash), treat as no-op
+          // Conflictos de unicidad (ya existe) se ignoran sin contarse como error
           const msgErr = String(error.message || '')
           if (/duplicate key|unique constraint|conflict/i.test(msgErr)) {
-            out.details.push({ uid, subject, info: 'duplicate (hash conflict)' })
+            // noop: ya existe este registro para este user_id (UID o Message-ID)
           } else {
             out.errors++
             out.details.push({ uid, subject, error: error.message })

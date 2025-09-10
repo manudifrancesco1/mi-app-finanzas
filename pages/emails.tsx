@@ -23,6 +23,7 @@ export default function EmailsPage() {
   const [syncing, setSyncing] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [debugAll, setDebugAll] = useState(false)
 
   // proteger por login
   useEffect(() => {
@@ -45,12 +46,16 @@ export default function EmailsPage() {
       const uid = session?.user?.id
       if (!uid) return
 
-      const { data, error } = await supabase
+      let q = supabase
         .from('email_transactions')
         .select('id,user_id,date_local,email_datetime,subject,merchant,amount,currency,card_last4,processed,source')
-        .eq('user_id', uid)
         .order('email_datetime', { ascending: false })
         .limit(100)
+
+      if (!debugAll) {
+        q = q.eq('user_id', uid!)
+      }
+      const { data, error } = await q
 
       if (error) throw error
       setRows(data || [])
@@ -62,7 +67,7 @@ export default function EmailsPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [debugAll])
 
   const trigger = async () => {
     setSyncing(true)
@@ -98,6 +103,13 @@ export default function EmailsPage() {
         <h1 className="text-2xl font-semibold">Emails</h1>
         <div className="flex gap-2">
           <button
+            onClick={() => setDebugAll(v => !v)}
+            className={`px-3 py-2 rounded text-sm ${debugAll ? 'bg-purple-600 text-white' : 'bg-gray-100'}`}
+            title="Modo debug: ver emails de todos los usuarios"
+          >
+            {debugAll ? 'Debug: ALL' : 'Debug: OFF'}
+          </button>
+          <button
             onClick={trigger}
             disabled={syncing}
             className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
@@ -129,6 +141,7 @@ export default function EmailsPage() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-3 py-2 text-left">Fecha</th>
+              {debugAll && <th className="px-3 py-2 text-left">User</th>}
               <th className="px-3 py-2 text-left">Asunto</th>
               <th className="px-3 py-2 text-left">Comercio</th>
               <th className="px-3 py-2 text-right">Monto</th>
@@ -141,6 +154,7 @@ export default function EmailsPage() {
                 <td className="px-3 py-2 whitespace-nowrap">
                   {(r.date_local || r.email_datetime || '').slice(0,10)}
                 </td>
+                {debugAll && <td className="px-3 py-2 break-all text-xs">{r.user_id}</td>}
                 <td className="px-3 py-2">{r.subject}</td>
                 <td className="px-3 py-2">{r.merchant ?? '—'}</td>
                 <td className="px-3 py-2 text-right">
@@ -152,7 +166,7 @@ export default function EmailsPage() {
               </tr>
             ))}
             {rows.length === 0 && !loading && (
-              <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-500">Sin resultados</td></tr>
+              <tr><td colSpan={debugAll ? 6 : 5} className="px-3 py-6 text-center text-gray-500">Sin resultados</td></tr>
             )}
           </tbody>
         </table>
