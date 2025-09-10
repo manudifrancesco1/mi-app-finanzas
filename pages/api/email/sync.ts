@@ -48,6 +48,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const admin = createClient(supabaseUrl, serviceKey)
 
+  // Output accumulator (debe existir antes de usarlo en los bloques de debug)
+  const out: Out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] }
+
+  // Debug: identify project and current row count before inserting
+  const preProject = (() => {
+    try {
+      const u = new URL(supabaseUrl)
+      return u.hostname
+    } catch { return supabaseUrl }
+  })()
+  try {
+    const { count: preCount, error: preErr } = await admin
+      .from('email_transactions')
+      .select('id', { count: 'exact', head: true })
+    out.details.push({ _preflight: { supabase_host: preProject, pre_count: preCount ?? null, pre_error: preErr?.message || null } })
+  } catch (e:any) {
+    out.details.push({ _preflight: { supabase_host: preProject, pre_count: 'err', pre_error: e?.message || String(e) } })
+  }
+
   const { user_id: bodyUserId, limit = 50, days = 14, from } = (req.body ?? {}) as {
     user_id?: string
     limit?: number
@@ -74,7 +93,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const fromFilter = (from && String(from).trim()) || fromFilterEnv
   const defaultCurrency = (process.env.EMAIL_SYNC_DEFAULT_CURRENCY || 'ARS').trim()
 
-  const out: Out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] }
   const debug = {
     scanned: 0,
     matchedFrom: 0,
@@ -213,6 +231,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         out.errors++
         out.details.push({ error: e?.message || String(e) })
       }
+    }
+
+    // Postflight count
+    try {
+      const { count: postCount, error: postErr } = await admin
+        .from('email_transactions')
+        .select('id', { count: 'exact', head: true })
+      out.details.push({ _postflight: { count: postCount ?? null, error: postErr?.message || null } })
+    } catch (e:any) {
+      out.details.push({ _postflight: { count: 'err', error: e?.message || String(e) } })
     }
 
     out.details.push({ _summary: debug })
