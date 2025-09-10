@@ -25,6 +25,10 @@ export default function EmailsPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [debugAll, setDebugAll] = useState(false)
 
+  const [processedFilter, setProcessedFilter] = useState<'all' | 'pending' | 'done'>('all')
+  const [search, setSearch] = useState('')
+  const [limitRows, setLimitRows] = useState(100)
+
   // proteger por login
   useEffect(() => {
     const check = async () => {
@@ -50,11 +54,21 @@ export default function EmailsPage() {
         .from('email_transactions')
         .select('id,user_id,date_local,email_datetime,subject,merchant,amount,currency,card_last4,processed,source')
         .order('email_datetime', { ascending: false })
-        .limit(100)
+        .limit(limitRows)
 
       if (!debugAll) {
         q = q.eq('user_id', uid!)
       }
+      if (processedFilter === 'pending') {
+        q = q.eq('processed', false)
+      } else if (processedFilter === 'done') {
+        q = q.eq('processed', true)
+      }
+      if (search.trim()) {
+        const s = `%${search.trim()}%`
+        q = q.or(`merchant.ilike.${s},subject.ilike.${s}`)
+      }
+
       const { data, error } = await q
 
       if (error) throw error
@@ -67,7 +81,7 @@ export default function EmailsPage() {
     }
   }
 
-  useEffect(() => { load() }, [debugAll])
+  useEffect(() => { load() }, [debugAll, processedFilter, limitRows])
 
   const trigger = async () => {
     setSyncing(true)
@@ -81,7 +95,7 @@ export default function EmailsPage() {
       const r = await fetch('/api/email/trigger', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, limit: 25, days: 7 }),
+        body: JSON.stringify({ user_id: uid, limit: 25, days: 7, debug: true }),
       })
       const data = await r.json().catch(() => ({} as any))
       if (!r.ok) throw new Error(data?.error || 'Error')
@@ -101,7 +115,36 @@ export default function EmailsPage() {
     <div className="max-w-4xl mx-auto p-4">
       <header className="flex items-center justify-between mb-3">
         <h1 className="text-2xl font-semibold">Emails</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') load() }}
+            placeholder="Buscar por comercio o asunto…"
+            className="px-3 py-2 rounded border text-sm"
+            style={{ minWidth: 220 }}
+          />
+          <select
+            value={processedFilter}
+            onChange={e => setProcessedFilter(e.target.value as any)}
+            className="px-2 py-2 rounded border text-sm"
+            title="Filtrar por estado"
+          >
+            <option value="all">Todos</option>
+            <option value="pending">Sólo pendientes</option>
+            <option value="done">Sólo procesados</option>
+          </select>
+          <select
+            value={limitRows}
+            onChange={e => setLimitRows(Number(e.target.value))}
+            className="px-2 py-2 rounded border text-sm"
+            title="Cantidad a mostrar"
+          >
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+          </select>
+
           <button
             onClick={() => setDebugAll(v => !v)}
             className={`px-3 py-2 rounded text-sm ${debugAll ? 'bg-purple-600 text-white' : 'bg-gray-100'}`}
@@ -133,6 +176,12 @@ export default function EmailsPage() {
           Última actualización: {lastUpdated.toLocaleTimeString('es-AR', { hour12: false })}
         </div>
       )}
+
+      <div className="mb-2 text-xs text-gray-500">
+        Filtro: {processedFilter === 'all' ? 'todos' : processedFilter === 'pending' ? 'pendientes' : 'procesados'}
+        {search.trim() ? ` · búsqueda: “${search.trim()}”` : ''} · límite: {limitRows}
+        {debugAll ? ' · debug: ALL' : ''}
+      </div>
 
       {msg && <div className="mb-3 text-sm text-gray-700">{msg}</div>}
 
