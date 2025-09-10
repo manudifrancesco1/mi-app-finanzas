@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
+import { createHash } from 'crypto'
 
 type Out = {
   ok: boolean
@@ -142,29 +143,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
         const email_datetime = (msg.internalDate ? new Date(msg.internalDate) : new Date()).toISOString()
 
+        // Build a stable hash (dedupe) using user, from, subject and datetime/message-id
+        const messageId = (parsed.messageId as string | undefined) || ''
+        const dedupeKey = `${user_id}|${fromAddr}|${subject}|${messageId || email_datetime}`
+        const hash = createHash('sha256').update(dedupeKey).digest('hex')
+
         // Insert minimal row; parser de merchant/amount quedará en promote o parsers específicos
         const { error } = await admin
           .from('email_transactions')
-          .insert([{
+          .upsert([{
             user_id,
             subject,
             email_datetime,
             source: 'imap',
             processed: false,
-            // opcionales - dejar nulos si no se extraen
             merchant: null,
             amount: null,
             currency: null,
             card_last4: null,
             date_local: null,
-            // guardar parte del body por trazabilidad si querés (opcional):
-            // raw_excerpt: body.slice(0, 500)
-          }])
+            message_id: messageId || null,
+            hash,
+          }], { onConflict: 'hash', ignoreDuplicates: true })
 
         out.attempted++
         if (error) {
-          out.errors++
-          out.details.push({ uid, subject, error: error.message })
+          // If duplicate (unique violation on hash), treat as no-op
+          const msgErr = String(error.message || '')
+          if (/duplicate key|unique constraint|conflict/i.test(msgErr)) {
+            out.details.push({ uid, subject, info: 'duplicate (hash conflict)' })
+          } else {
+            out.errors++
+            out.details.push({ uid, subject, error: error.message })
+          }
         } else {
           out.inserted++
         }
