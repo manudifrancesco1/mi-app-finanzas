@@ -26,6 +26,33 @@ const Expenses: NextPage = () => {
   const [payInputs, setPayInputs] = useState<Record<string, string>>({})
   const [extraMonths, setExtraMonths] = useState<string[]>([])
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
+  const [syncingEmails, setSyncingEmails] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const triggerEmailSync = async () => {
+    setSyncingEmails(true)
+    setSyncMsg(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) throw new Error('No hay sesión activa')
+      const r = await fetch('/api/email/trigger', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user_id: uid, limit: 25, days: 7 }),
+      })
+      const data = await r.json().catch(() => ({} as any))
+      if (!r.ok) throw new Error(data?.error || 'Error')
+      const attempted = Number(data?.sync?.attempted ?? 0)
+      const inserted  = Number(data?.sync?.inserted  ?? 0)
+      const errors    = Number(data?.sync?.errors    ?? 0)
+      setSyncMsg(`Emails: intentados ${attempted}, insertados ${inserted}, errores ${errors}`)
+      await loadTxs()
+    } catch (e: any) {
+      setSyncMsg(`Sync falló: ${e?.message || 'Error'}`)
+    } finally {
+      setSyncingEmails(false)
+    }
+  }
 
   const fixedCategories = [
     'Alquiler',
@@ -342,6 +369,14 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
               Fijos
             </button>
           </div>
+          <button
+            onClick={triggerEmailSync}
+            disabled={syncingEmails}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-sm transition disabled:opacity-50"
+            title="Leer últimos correos y promover a gastos"
+          >
+            {syncingEmails ? 'Leyendo…' : 'Leer mails'}
+          </button>
           {modeTab === 'variable' && (
             <button
               onClick={() => {
@@ -376,6 +411,8 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
           )}
         </div>
       </div>
+
+      {syncMsg && <p className="text-sm text-gray-700 mb-2">{syncMsg}</p>}
 
       <div className="mb-4">
         <input

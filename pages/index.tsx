@@ -78,8 +78,6 @@ const Dashboard: NextPage = () => {
   const [showIncomeModal, setShowIncomeModal] = useState(false)
   const [prevBalances, setPrevBalances] = useState<{ ym: string; balance: number }[]>([])
   const [ytdBalance, setYtdBalance] = useState(0)
-  const [emailSyncLoading, setEmailSyncLoading] = useState(false)
-  const [emailSyncMsg, setEmailSyncMsg] = useState<string | null>(null)
 
   const toggleCategory = (name: string) =>
     setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
@@ -91,29 +89,6 @@ const Dashboard: NextPage = () => {
     } catch (_) {}
   };
 
-  const runEmailPromote = async () => {
-    setEmailSyncLoading(true)
-    setEmailSyncMsg(null)
-    try {
-      const r = await fetch('/api/email/trigger', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ limit: 50, days: 7 }),
-      })
-      const data = await r.json().catch(() => ({} as any))
-      if (!r.ok) throw new Error(data?.error || 'Error')
-
-      const attempted = Number(data?.sync?.attempted ?? 0)
-      const inserted  = Number(data?.sync?.inserted  ?? 0)
-      const errors    = Number(data?.sync?.errors    ?? 0)
-
-      setEmailSyncMsg(`Listo ✅ Intentados: ${attempted} — Insertados: ${inserted} — Errores: ${errors}`)
-    } catch (e: any) {
-      setEmailSyncMsg(`Ups ❌ ${e?.message || 'Error'}`)
-    } finally {
-      setEmailSyncLoading(false)
-    }
-  }
 
   // 1) Comprobar sesión
   useEffect(() => {
@@ -349,21 +324,7 @@ const Dashboard: NextPage = () => {
               <ChevronRightIcon className="h-5 w-5 text-gray-700" />
             </button>
           </div>
-          <div className="flex items-center justify-center">
-            <button
-              onClick={runEmailPromote}
-              disabled={emailSyncLoading}
-              className="ml-0 sm:ml-4 px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50 hover:bg-blue-700 active:scale-95 transition"
-              aria-label="Leer emails ahora"
-              title="Procesa manualmente emails pendientes"
-            >
-              {emailSyncLoading ? 'Leyendo…' : 'Leer emails'}
-            </button>
-          </div>
         </div>
-        {emailSyncMsg && (
-          <div className="mt-1 text-center text-xs text-gray-600">{emailSyncMsg}</div>
-        )}
       </nav>
       <div className="pt-16">
         {/* Modales */}
