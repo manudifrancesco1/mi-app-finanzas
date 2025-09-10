@@ -1,73 +1,97 @@
 // pages/api/email/promote/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next'
+import { createClient } from '@supabase/supabase-js'
 
-const EMAIL_INGEST_SECRET = process.env.EMAIL_INGEST_SECRET!
+const SECRET = process.env.EMAIL_INGEST_SECRET
 
-/**
- * Trigger endpoint (/api/email/promote, POST) that performs BOTH steps:
- * 1) /api/email/ingest  -> lee emails nuevos y los guarda en email_transactions
- * 2) /api/email/promote -> mueve los pendientes a transactions (upsert por hash)
- *
- * Esto permite que el botón "Leer emails" funcione de punta a punta en un solo click,
- * incluso si antes vaciaste la tabla email_transactions.
- */
-export default async function trigger(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, error: 'Method not allowed' })
-  }
+type Out = {
+  ok: boolean
+  attempted: number
+  updated: number
+  errors: number
+  details: any[]
+}
+
+const VISA_REGEX =
+  /VISA\s+Consumo\s+autorizado\s*-\s*Comercio:\s*(.+?)\s*-\s*Moneda:\s*([A-Z]{3})\s*-\s*Monto:\s*\$\s*([\d\.\,]+)\s*-\s*Terminación\s*(\d+)/i
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Out | any>) {
+  if (req.method !== 'POST') return res.status(405).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'Method not allowed' }] })
 
   try {
-    const qs = req.url?.includes('?') ? `?${req.url.split('?')[1]}` : ''
-    const proto = (req.headers['x-forwarded-proto'] as string) || 'https'
-    const host = req.headers.host as string
-    const base = `${proto}://${host}`
-
-    // Compartimos el mismo secreto para ambas llamadas internas
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      'x-email-secret': EMAIL_INGEST_SECRET,
+    // simple auth to avoid public abuse
+    if (!SECRET || req.headers['x-email-secret'] !== SECRET) {
+      return res.status(401).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'Unauthorized' }] })
     }
 
-    // 1) Ingest: trae emails nuevos -> email_transactions
-    const ingestResp = await fetch(`${base}/api/email/ingest${qs}`, {
-      method: 'POST',
-      headers,
-    })
-    const ingestJson = await safeJson(ingestResp)
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+    if (!supabaseUrl || !serviceKey) {
+      return res.status(500).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'Missing Supabase envs' }] })
+    }
+    const admin = createClient(supabaseUrl, serviceKey)
 
-    // 2) Promote: mueve pendientes -> transactions
-    const promoteResp = await fetch(`${base}/api/email/promote${qs}`, {
-      method: 'POST',
-      headers,
-    })
-    const promoteJson = await safeJson(promoteResp)
+    const { user_id: bodyUserId, limit = 50 } = (req.body ?? {}) as { user_id?: string; limit?: number }
+    const user_id = bodyUserId || process.env.DEFAULT_USER_ID
+    if (!user_id) return res.status(400).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'missing user_id' }] })
 
-    return res.status(200).json({
-      ok: true,
-      step: 'ingest+promote',
-      ingest: sanitize(ingestJson),
-      promote: sanitize(promoteJson),
-    })
+    // traer pendientes para este usuario
+    const { data: pending, error: qErr } = await admin
+      .from('email_transactions')
+      .select('id, subject, email_datetime, processed, currency')
+      .eq('user_id', user_id)
+      .eq('processed', false)
+      .order('email_datetime', { ascending: false })
+      .limit(Number(limit))
+
+    if (qErr) return res.status(500).json({ ok: false, attempted: 0, updated: 0, errors: 1, details: [{ error: qErr.message }] })
+
+    const out: Out = { ok: true, attempted: pending?.length || 0, updated: 0, errors: 0, details: [] }
+
+    for (const row of pending || []) {
+      try {
+        const subject = row.subject || ''
+        const m = subject.match(VISA_REGEX)
+        if (!m) {
+          // no se pudo parsear, lo dejamos pendiente
+          out.details.push({ id: row.id, subject, info: 'skip: no visa match' })
+          continue
+        }
+        const merchant = m[1].trim()
+        const currency = (m[2] || row.currency || 'ARS').trim()
+        const rawAmount = m[3].trim()
+        const last4 = m[4].trim()
+
+        // normalizar monto "6.248,69" -> 6248.69
+        const amount = Number(rawAmount.replace(/\./g, '').replace(',', '.'))
+
+        // marcar como procesado y guardar campos parseados
+        const { error: upErr } = await admin
+          .from('email_transactions')
+          .update({
+            merchant,
+            currency,
+            amount,
+            card_last4: last4,
+            processed: true,
+          })
+          .eq('id', row.id)
+          .eq('user_id', user_id)
+
+        if (upErr) {
+          out.errors++
+          out.details.push({ id: row.id, subject, error: upErr.message })
+        } else {
+          out.updated++
+        }
+      } catch (e: any) {
+        out.errors++
+        out.details.push({ id: row.id, error: e?.message || String(e) })
+      }
+    }
+
+    return res.status(200).json(out)
   } catch (e: any) {
-    console.error('trigger error', e)
-    return res.status(500).json({ ok: false, error: e?.message || 'Internal error' })
+    return res.status(500).json({ ok: false, attempted: 0, updated: 0, errors: 1, details: [{ error: e?.message || 'Internal error' }] })
   }
-}
-
-async function safeJson(resp: Response) {
-  try {
-    return await resp.json()
-  } catch {
-    return { ok: false, status: resp.status, text: await resp.text() }
-  }
-}
-
-function sanitize(obj: any) {
-  // Evita retornar datos enormes; dejar resumen útil
-  if (!obj || typeof obj !== 'object') return obj
-  const out: any = { ...obj }
-  if (Array.isArray(out.inserted)) out.inserted = `[${out.inserted.length} items]`
-  if (Array.isArray(out.errors)) out.errors = out.errors.slice(0, 3) // primeras 3
-  if (Array.isArray(out.pending)) out.pending = `[${out.pending.length} items]`
-  return out
 }
