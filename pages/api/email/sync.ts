@@ -160,6 +160,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const imap_mailbox = 'INBOX'
         const imap_uid = Number(uid)
 
+        // Elegimos objetivo de conflicto: si hay Message-ID lo usamos, sino caemos a UID
+        const conflictTarget =
+          messageId && messageId.trim() ? 'user_id,message_id' : 'user_id,provider,imap_mailbox,imap_uid'
+
         // hash requerido por el esquema actual (aunque deduplicamos por UID)
         const hash = createHash('sha256')
           .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
@@ -190,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             currency: defaultCurrency,
             card_last4: null,
             hash,
-          }], { onConflict: 'user_id,provider,imap_mailbox,imap_uid', ignoreDuplicates: true })
+          }], { onConflict: conflictTarget, ignoreDuplicates: true })
 
         out.attempted++
         if (error) {
