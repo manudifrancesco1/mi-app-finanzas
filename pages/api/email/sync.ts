@@ -93,8 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const searchQuery: SearchObject = { since }
     // IMPORTANTE: No filtramos por "from" aquí (suele fallar por address exacto). Filtramos luego del parse.
 
-    const uids = await client.search(searchQuery)
-    if (!uids?.length) {
+    const uidsRes = await client.search(searchQuery)
+    const uids = Array.isArray(uidsRes) ? uidsRes : []
+    if (uids.length === 0) {
       out.details.push({ _summary: { ...debug, info: 'no uids for date range' } })
       return res.status(200).json(out)
     }
@@ -106,10 +107,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     for (const uid of slice) {
       try {
         debug.scanned++
-        const msg = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
-        if (!msg?.source) continue
+        const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
+        if (!msg || !msg.source) continue
 
-        const parsed = await simpleParser(msg.source as Buffer)
+        const parsed = await simpleParser(msg.source as any)
         const subject = parsed.subject || ''
         if (/^\s*(fwd:|re:)/i.test(subject)) { debug.skippedFwdRe++; continue }
 
@@ -139,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         debug.matchedSubject++
 
         const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
-        const email_datetime = (msg.internalDate || new Date()).toISOString()
+        const email_datetime = (msg.internalDate ? new Date(msg.internalDate) : new Date()).toISOString()
 
         // Insert minimal row; parser de merchant/amount quedará en promote o parsers específicos
         const { error } = await admin
