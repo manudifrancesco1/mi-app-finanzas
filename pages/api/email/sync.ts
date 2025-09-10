@@ -162,7 +162,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             currency: null,
             card_last4: null,
             date_local: null,
-            message_id: messageId || null,
             hash,
           }], { onConflict: 'hash', ignoreDuplicates: true })
 
