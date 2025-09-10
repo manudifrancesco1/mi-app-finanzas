@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
+import { createHash } from 'crypto'
 
 type Out = {
   ok: boolean
@@ -159,6 +160,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const imap_mailbox = 'INBOX'
         const imap_uid = Number(uid)
 
+        // hash requerido por el esquema actual (aunque deduplicamos por UID)
+        const hash = createHash('sha256')
+          .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
+          .digest('hex')
+
         // Upsert por UID de IMAP para evitar duplicados reales
         const { error } = await admin
           .from('email_transactions')
@@ -183,6 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             amount: null,
             currency: defaultCurrency,
             card_last4: null,
+            hash,
           }], { onConflict: 'user_id,provider,imap_mailbox,imap_uid', ignoreDuplicates: true })
 
         out.attempted++
