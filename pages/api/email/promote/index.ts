@@ -25,6 +25,12 @@ const BODY_REGEX_1 =
 const BODY_REGEX_2 =
   /Consumo autorizado[\s\S]*?Monto:\s*\$\s*([\d\.\,]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?(?:en|Comercio:)\s*([A-Z0-9\*\s\.\-]+)[\s\S]*?Terminación\s*(\d+)/i
 
+const BODY_REGEX_3 =
+  /Comercio:\s*([^\n\r]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?Monto:\s*\$?\s*([\d\.,]+)/i
+
+const LAST4_REGEX =
+  /(Terminación|Tarjeta)\s*:?\s*(\d{3,4})/i
+
 const normalizeAmount = (raw: string) =>
   Number(raw.replace(/\./g, '').replace(',', '.'))
 
@@ -56,6 +62,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(400).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'missing user_id' }] })
   }
 
+  const out: Out = { ok: true, attempted: 0, updated: 0, errors: 0, details: [] }
+
+  // presupuesto de tiempo para evitar timeout en serverless
+  const DEADLINE = Date.now() + 18000; // ~18s
+
   // IMAP setup (por si necesitamos leer cuerpo)
   const IMAP_HOST = String(process.env.IMAP_HOST || '')
   const IMAP_PORT = Number(process.env.IMAP_PORT || 993)
@@ -63,8 +74,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const IMAP_USER = String(process.env.IMAP_USER || '')
   const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD || '')
   const FROM_FILTER = (process.env.EMAIL_SYNC_FROM || 'visa.com').trim()
-
-  const out: Out = { ok: true, attempted: 0, updated: 0, errors: 0, details: [] }
 
   // 1) Traer pendientes
   const { data: pending, error: qErr } = await admin
@@ -102,6 +111,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   // 3) Procesar
   for (const row of pending) {
+    if (Date.now() > DEADLINE) {
+      out.details.push({ id: row.id, info: 'timeout-budget' })
+      break
+    }
     try {
       const subject = row.subject || ''
       let merchant: string | null = null
@@ -119,19 +132,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
 
       // b) Si no se pudo, intentar del cuerpo (IMAP)
-      if (!merchant || !amount || !currency) {
+      if ((!merchant || !amount || !currency) && Date.now() < DEADLINE) {
         const cli = await ensureImap()
         if (cli) {
-          // Buscar por fecha aproximada y remitente
+          // Ventana ±24h alrededor del email para acotar búsqueda
           const center = row.email_datetime ? new Date(row.email_datetime) : new Date()
-          const since = new Date(center.getTime() - 48 * 3600 * 1000) // 48h antes
-          const searchQuery: SearchObject = { since }
+          const since = new Date(center.getTime() - 24 * 3600 * 1000)
+          const before = new Date(center.getTime() + 24 * 3600 * 1000)
+          const searchQuery: SearchObject = { since, before }
           const uidsRes = await cli.search(searchQuery)
           const uids = Array.isArray(uidsRes) ? uidsRes : []
-          // Tomar últimos 200 para acotar
-          const sample = uids.slice(-200).reverse()
+          // Limitar a 80 más recientes
+          const sample = uids.slice(-80).reverse()
+          let matched = false
 
           for (const uid of sample) {
+            // cut by time budget
+            if (Date.now() > DEADLINE) break
+
             const msg: any = await cli.fetchOne(uid, { source: true, envelope: true, internalDate: true })
             if (!msg || !msg.source) continue
             const parsed = await simpleParser(msg.source as any)
@@ -142,29 +160,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             const hay = `${fromName} <${fromAddr}>`.toLowerCase()
             if (!hay.includes(FROM_FILTER.toLowerCase())) continue
 
-            // Subject match
             const subj = parsed.subject || ''
-            if (!/Alerta de Compras Visa/i.test(subj) && !VISA_SUBJECT_REGEX.test(subj)) continue
-
             const bodyTxt = (parsed.text || '').trim() || (parsed.html ? (parsed.html as string).replace(/<[^>]+>/g, ' ') : '')
-            let mm = subj.match(VISA_SUBJECT_REGEX) || bodyTxt.match(BODY_REGEX_1) || bodyTxt.match(BODY_REGEX_2)
-            if (mm) {
-              // Mapear grupos segun regex
-              if (mm.length >= 5) {
-                // subj/body con grupos [1]=merchant [2]=currency [3]=amount [4]=last4
-                merchant = (mm[1] || '').trim()
-                currency = (mm[2] || row.currency || 'ARS').trim()
-                amount = normalizeAmount(mm[3] || '')
-                last4 = (mm[4] || '').trim()
-              } else if (mm.length >= 4) {
-                // BODY_REGEX_2: [1]=amount [2]=currency [3]=merchant [4]=last4
-                amount = normalizeAmount(mm[1] || '')
-                currency = (mm[2] || row.currency || 'ARS').trim()
-                merchant = (mm[3] || '').trim()
-                last4 = (mm[4] || '').trim()
-              }
-              break
+
+            // Intentos de extracción en orden: subject, body variantes
+            let mSubj2 = subj.match(VISA_SUBJECT_REGEX)
+            let mBody1 = bodyTxt.match(BODY_REGEX_1)
+            let mBody2 = bodyTxt.match(BODY_REGEX_2)
+            let mBody3 = bodyTxt.match(BODY_REGEX_3)
+
+            if (mSubj2) {
+              merchant = (mSubj2[1] || '').trim()
+              currency = (mSubj2[2] || row.currency || 'ARS').trim()
+              amount = normalizeAmount(mSubj2[3] || '')
+              last4 = (mSubj2[4] || '').trim()
+              matched = true
+            } else if (mBody1) {
+              // BODY_REGEX_1: [1]=merchant [2]=currency [3]=amount
+              merchant = (mBody1[1] || '').trim()
+              currency = (mBody1[2] || row.currency || 'ARS').trim()
+              amount = normalizeAmount(mBody1[3] || '')
+              // last4 puede venir en otra línea
+              const mL4 = bodyTxt.match(LAST4_REGEX)
+              last4 = mL4 ? (mL4[2] || '').trim() : last4
+              matched = true
+            } else if (mBody2) {
+              // BODY_REGEX_2: [1]=amount [2]=currency [3]=merchant [4]=last4
+              amount = normalizeAmount(mBody2[1] || '')
+              currency = (mBody2[2] || row.currency || 'ARS').trim()
+              merchant = (mBody2[3] || '').trim()
+              last4 = (mBody2[4] || '').trim()
+              matched = true
+            } else if (mBody3) {
+              // BODY_REGEX_3: [1]=merchant [2]=currency [3]=amount
+              merchant = (mBody3[1] || '').trim()
+              currency = (mBody3[2] || row.currency || 'ARS').trim()
+              amount = normalizeAmount(mBody3[3] || '')
+              const mL4 = bodyTxt.match(LAST4_REGEX)
+              last4 = mL4 ? (mL4[2] || '').trim() : last4
+              matched = true
             }
+
+            if (matched) break
+          }
+
+          if (!matched) {
+            out.details.push({ id: row.id, subject, info: 'no-match-in-imap-window', window: { since: since.toISOString(), before: before.toISOString() } })
           }
         }
       }
