@@ -3,7 +3,6 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
-import { createHash } from 'crypto'
 
 type Out = {
   ok: boolean
@@ -148,32 +147,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         debug.matchedSubject++
 
         const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
-        const email_datetime = (msg.internalDate ? new Date(msg.internalDate) : new Date()).toISOString()
 
+        // Fechas
         const internal = msg.internalDate ? new Date(msg.internalDate) : new Date()
+        const email_datetime = internal.toISOString()
         const date_local = formatYMDLocal(internal, 'America/Argentina/Buenos_Aires')
 
-        // Build a stable hash (dedupe) using user, from, subject and datetime/message-id
-        const messageId = (parsed.messageId as string | undefined) || ''
-        const dedupeKey = `${user_id}|${fromAddr}|${subject}|${messageId || email_datetime}`
-        const hash = createHash('sha256').update(dedupeKey).digest('hex')
+        // Identificadores IMAP
+        const messageId = (parsed.messageId as string | undefined) || (msg.envelope?.messageId as string | undefined) || null
+        const provider = 'imap'
+        const imap_mailbox = 'INBOX'
+        const imap_uid = Number(uid)
 
-        // Insert minimal row; parser de merchant/amount quedará en promote o parsers específicos
+        // Upsert por UID de IMAP para evitar duplicados reales
         const { error } = await admin
           .from('email_transactions')
           .upsert([{
             user_id,
+            provider,
+            imap_mailbox,
+            imap_uid,
+            message_id: messageId,
+
             subject,
             email_datetime,
+            date_local,
+
             source: 'imap',
             processed: false,
+
+            from_name: fromName || null,
+            from_address: fromAddr || null,
+
             merchant: null,
             amount: null,
             currency: defaultCurrency,
             card_last4: null,
-            date_local,
-            hash,
-          }], { onConflict: 'hash', ignoreDuplicates: true })
+          }], { onConflict: 'user_id,provider,imap_mailbox,imap_uid', ignoreDuplicates: true })
 
         out.attempted++
         if (error) {
