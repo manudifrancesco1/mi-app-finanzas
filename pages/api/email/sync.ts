@@ -21,6 +21,12 @@ function stripHtml(html: string) {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function formatYMDLocal(d: Date, timeZone: string) {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+  // en-CA yields YYYY-MM-DD
+  return fmt.format(d)
+}
+
 const normalize = (s: string) =>
   s ? s.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/\s+/g, ' ') : ''
 
@@ -143,6 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const body = (parsed.text || '').trim() || (parsed.html ? stripHtml(parsed.html) : '')
         const email_datetime = (msg.internalDate ? new Date(msg.internalDate) : new Date()).toISOString()
 
+        const internal = msg.internalDate ? new Date(msg.internalDate) : new Date()
+        const date_local = formatYMDLocal(internal, 'America/Argentina/Buenos_Aires')
+
         // Build a stable hash (dedupe) using user, from, subject and datetime/message-id
         const messageId = (parsed.messageId as string | undefined) || ''
         const dedupeKey = `${user_id}|${fromAddr}|${subject}|${messageId || email_datetime}`
@@ -161,7 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             amount: null,
             currency: null,
             card_last4: null,
-            date_local: null,
+            date_local,
             hash,
           }], { onConflict: 'hash', ignoreDuplicates: true })
 
