@@ -66,10 +66,15 @@ export default function EmailsPage() {
     setSyncing(true)
     setMsg(null)
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) {
+        throw new Error('No hay sesión activa')
+      }
       const r = await fetch('/api/email/trigger', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ limit: 25, days: 7 }),
+        body: JSON.stringify({ user_id: uid, limit: 25, days: 7 }),
       })
       const data = await r.json().catch(() => ({} as any))
       if (!r.ok) throw new Error(data?.error || 'Error')

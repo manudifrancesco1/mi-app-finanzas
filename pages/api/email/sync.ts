@@ -161,14 +161,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const out = { ok: true, attempted: 0, inserted: 0, errors: 0, details: [] as any[] }
 
+  // Optional filters to narrow which emails are ingested
+  const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || '').trim()
+  const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || '').trim()
+
   try {
     await client.connect()
     await client.mailboxOpen('INBOX')
 
     const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
     const searchQuery: SearchObject = { since }
-    if (from) {
-      searchQuery.from = from
+    // Prefer body-provided "from", otherwise env var
+    const fromSearch = (from && String(from).trim()) || fromFilterEnv
+    if (fromSearch) {
+      searchQuery.from = fromSearch
     }
 
     const uids = await client.search(searchQuery)
@@ -186,9 +192,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const selected = msgs.slice(0, Number(limit))
 
     for (const m of selected) {
+      // Envelope-based sender filtering (defensive, in addition to IMAP search)
+      const envelopeFromName = (m.envelope?.from?.[0]?.name as string | undefined) || ''
+      const envelopeFromAddr = (m.envelope?.from?.[0]?.address as string | undefined) || ''
+      if (fromFilterEnv) {
+        const haystack = `${envelopeFromName} <${envelopeFromAddr}>`
+        if (!haystack.toLowerCase().includes(fromFilterEnv.toLowerCase())) {
+          // Skip if it does not match the expected sender text
+          continue
+        }
+      }
       try {
         const parsedMail = await simpleParser(m.source as Buffer)
         const subject = parsedMail.subject || ''
+        // Skip forwards/replies or non-matching prefixes
+        if (/^\s*(fwd:|re:)/i.test(subject)) {
+          continue
+        }
+        if (subjectPrefix && !subject.startsWith(subjectPrefix)) {
+          continue
+        }
         const body = (parsedMail.text || '').trim() || (parsedMail.html ? stripHtml(parsedMail.html) : '')
         await ingestOne(admin, user_id, subject, body, m.internalDate || new Date(), parsedMail.messageId || undefined)
         out.attempted++
