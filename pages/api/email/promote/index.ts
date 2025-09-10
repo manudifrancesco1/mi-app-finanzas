@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
+import { createHash } from 'crypto'
 
 const SECRET = process.env.EMAIL_INGEST_SECRET
 
@@ -34,6 +35,9 @@ const LAST4_REGEX =
 const normalizeAmount = (raw: string) =>
   Number(raw.replace(/\./g, '').replace(',', '.'))
 
+const txHash = (user_id: string, date_local: string, merchant: string, amount: number, currency: string) =>
+  createHash('sha256').update(`${user_id}|${date_local}|${merchant}|${amount}|${currency}`).digest('hex')
+
 function fmtYMDLocal(d: Date, timeZone: string) {
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
   return fmt.format(d)
@@ -60,6 +64,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const user_id = bodyUserId || process.env.DEFAULT_USER_ID
   if (!user_id) {
     return res.status(400).json({ ok: false, attempted: 0, updated: 0, errors: 0, details: [{ error: 'missing user_id' }] })
+  }
+
+  const { data: rules } = await admin
+    .from('merchant_rules')
+    .select('pattern,is_regex,priority,category_id,subcategory_id,active')
+    .eq('user_id', user_id)
+    .eq('active', true)
+    .order('priority', { ascending: true })
+
+  const applyRule = (merchant: string) => {
+    const hay = (merchant || '').toLowerCase()
+    for (const r of rules || []) {
+      if (!r) continue
+      if (!r.is_regex) {
+        if (hay.includes((r.pattern || '').toLowerCase())) return r
+      } else {
+        try {
+          if (new RegExp(r.pattern, 'i').test(merchant || '')) return r
+        } catch {}
+      }
+    }
+    return null
   }
 
   const out: Out = { ok: true, attempted: 0, updated: 0, errors: 0, details: [] }
@@ -233,6 +259,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         out.details.push({ id: row.id, subject, error: upErr.message })
       } else {
         out.updated++
+
+        const date_local = row.date_local || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).format(new Date(row.email_datetime))
+        const dedupe = txHash(user_id, date_local, merchant!, amount!, currency!)
+        const matched = applyRule(merchant!)
+
+        const txPayload: any = {
+          user_id,
+          date: date_local,
+          amount: amount!,
+          currency: (currency || 'ARS').trim(),
+          expense_mode: 'variable',
+          description: merchant!,
+          hash: dedupe,
+        }
+
+        if (matched?.category_id) txPayload.category_id = matched.category_id
+        if (matched?.subcategory_id) txPayload.subcategory_id = matched.subcategory_id
+
+        const { error: txErr } = await admin
+          .from('transactions')
+          .upsert([txPayload], { onConflict: 'hash', ignoreDuplicates: true })
+
+        if (txErr) {
+          out.details.push({ id: row.id, subject, warn: 'transaction upsert failed', err: txErr.message })
+        } else {
+          out.details.push({ id: row.id, subject, tx: 'upserted', merchant, amount, currency })
+        }
       }
     } catch (e: any) {
       out.errors++
