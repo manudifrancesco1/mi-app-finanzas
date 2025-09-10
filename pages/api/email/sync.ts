@@ -125,6 +125,10 @@ function stripHtml(html: string) {
     .trim()
 }
 
+function missingEnv(keys: string[]) {
+  return keys.filter((k) => !process.env[k] || String(process.env[k]).trim() === '')
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method Not Allowed' })
 
@@ -140,6 +144,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !serviceKey) return res.status(500).json({ ok: false, error: 'missing supabase env' })
   if (!user_id) return res.status(400).json({ ok: false, error: 'missing user_id' })
+
+  const missingImap = missingEnv(['IMAP_HOST', 'IMAP_PORT', 'IMAP_USER', 'IMAP_PASSWORD'])
+  if (missingImap.length) {
+    return res.status(500).json({ ok: false, error: `missing imap env: ${missingImap.join(', ')}` })
+  }
 
   const admin = createClient(supabaseUrl, serviceKey)
   const client = new ImapFlow({
@@ -193,6 +202,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json(out)
   } catch (e: any) {
+    console.error('[email/sync] Fatal error:', e)
     return res.status(500).json({ ok: false, error: e?.message || String(e) })
   } finally {
     try { await client.logout() } catch {}
