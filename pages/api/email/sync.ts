@@ -201,9 +201,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const imap_mailbox = IMAP_MAILBOX
         const imap_uid = Number(uid)
 
-        // Elegimos objetivo de conflicto: si hay Message-ID lo usamos, sino caemos a UID
-        const conflictTarget: string =
-          messageId && messageId.trim() ? 'user_id,message_id' : 'user_id,provider,imap_mailbox,imap_uid'
+        // Usamos siempre la clave única por UID de IMAP (índice: email_tx_unique_uid)
+        const conflictTarget: string = 'user_id,provider,imap_mailbox,imap_uid'
 
         // hash requerido por el esquema actual (aunque deduplicamos por UID)
         const hash = createHash('sha256')
@@ -259,11 +258,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
         if (upErr) {
           const msgErr = String(upErr.message || '')
-          if (/duplicate key|unique constraint|conflict/i.test(msgErr)) {
+          if (/no unique|no.*exclusion constraint matching the ON CONFLICT/i.test(msgErr)) {
+            out.errors++
+            if (debugFlag) out.details.push({ _result: { uid, status: 'schema-conflict', message: msgErr, conflictTarget } })
+            else out.details.push({ uid, subject, error: msgErr })
+          } else if (/duplicate key|unique constraint|conflict/i.test(msgErr)) {
             if (debugFlag) out.details.push({ _result: { uid, status: 'duplicate', message: msgErr } })
           } else {
             out.errors++
-            if (debugFlag) out.details.push({ _result: { uid, status: 'schema-conflict', message: msgErr } })
+            if (debugFlag) out.details.push({ _result: { uid, status: 'error', message: msgErr } })
             else out.details.push({ uid, subject, error: msgErr })
           }
         } else {
