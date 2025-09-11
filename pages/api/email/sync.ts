@@ -204,6 +204,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // Usamos siempre la clave única por UID de IMAP (índice: email_tx_unique_uid)
         const conflictTarget: string = 'user_id,provider,imap_mailbox,imap_uid'
 
+        // --- Parse VISA body to extract merchant/amount/currency/last4 ---
+        const textPart = (parsed.text || '').toString();
+        const htmlPart = (parsed.html ? stripHtml(String(parsed.html)) : '');
+        const bodyText = `${textPart} ${htmlPart}`.replace(/\s+/g, ' ').trim();
+
+        // Helper to parse amounts like 1.971.000,00 or 1649.00
+        const parseAmount = (raw: string | null | undefined): number | null => {
+          if (!raw) return null;
+          let s = String(raw).trim();
+
+          // Remove currency symbols and spaces
+          s = s.replace(/[^\d.,-]/g, '');
+
+          // If it looks like 1.234,56 (comma decimal), remove dots (thousands) and change comma to dot
+          if (/,/.test(s) && /\./.test(s)) {
+            s = s.replace(/\./g, '').replace(/,/g, '.');
+          } else if (/,/.test(s) && !/\./.test(s)) {
+            // Only comma present, treat as decimal separator
+            s = s.replace(/,/g, '.');
+          }
+          const n = Number(s);
+          return Number.isFinite(n) ? n : null;
+        };
+
+        // Extract merchant, currency, amount and card last4
+        let parsedMerchant: string | null = null;
+        let parsedCurrency: string | null = null;
+        let parsedAmount: number | null = null;
+        let parsedLast4: string | null = null;
+
+        // Comercio
+        const mMerch = bodyText.match(/Comercio:\s*([^\n\r]+)/i);
+        if (mMerch) {
+          parsedMerchant = mMerch[1].trim();
+        }
+
+        // Moneda
+        const mCurr = bodyText.match(/Moneda:\s*([A-Z]{3})/i);
+        if (mCurr) {
+          parsedCurrency = mCurr[1].toUpperCase();
+        }
+
+        // Monto
+        // Matches "Monto: 1649.00", "Monto: $ 1.971.000,00", etc.
+        const mAmt = bodyText.match(/Monto:\s*\$?\s*([0-9][\d.,]*)/i);
+        if (mAmt) {
+          parsedAmount = parseAmount(mAmt[1]);
+        }
+
+        // Últimos 4 de tarjeta (aparece como "Tarjeta: 1368" o "terminación 1368")
+        const mLastTarj = bodyText.match(/Tarjeta:\s*(\d{4})/i) || bodyText.match(/terminaci[oó]n\s*(\d{4})/i);
+        if (mLastTarj) parsedLast4 = mLastTarj[1];
+
         // hash requerido por el esquema actual (aunque deduplicamos por UID)
         const hash = createHash('sha256')
           .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
@@ -224,15 +277,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             date_local,
 
             source: 'imap',
-            processed: false,
 
             from_name: fromName || null,
             from_address: fromAddr || null,
 
-            merchant: null,
-            amount: null,
-            currency: defaultCurrency || 'ARS',
-            card_last4: null,
+            merchant: parsedMerchant,
+            amount: parsedAmount,
+            currency: parsedCurrency || defaultCurrency || 'ARS',
+            card_last4: parsedLast4,
+            processed: Boolean(parsedMerchant && parsedAmount != null),
+
             hash,
           }], { onConflict: conflictTarget, ignoreDuplicates: false })
           .select()
