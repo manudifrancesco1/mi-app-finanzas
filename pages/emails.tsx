@@ -18,25 +18,39 @@ type EmailRow = {
 
 function prettifyMerchant(m: string | null): string {
   if (!m) return '—'
-  // Si vino el cuerpo entero, cortar en " País:" y limpiar espacios
-  const cut = m.indexOf(' País:')
-  const name = (cut > 0 ? m.slice(0, cut) : m).replace(/\s+/g, ' ').trim()
+  // Normalizar espacios (incluye NBSP) y recortar
+  const normalized = m.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim()
+  // Cortar antes de cualquier metadato típico del cuerpo de la alerta
+  const metaIdx = normalized.search(/\s*(Comercio:|Pa[ií]s:|Ciudad:|Tarjeta:|Autorizaci[oó]n:|Tipo de transacci[oó]n:|Moneda:|Monto:)/i)
+  let name = metaIdx > 0 ? normalized.slice(0, metaIdx).trim() : normalized
+  // Quitar prefijo "Comercio: " si viniera
+  name = name.replace(/^Comercio:\s*/i, '')
+  // Evitar nombres absurdamente largos por si falla el corte
+  if (name.length > 80) name = name.slice(0, 80).trim()
   return name || '—'
 }
 
 function formatAmount(val: number | string | null, currency: string | null): string {
   if (val == null) return '—'
-  const rawStr = typeof val === 'string' ? val : String(val)
-  let num = typeof val === 'string' ? Number(val) : val
+  const rawStr = (typeof val === 'string' ? val : String(val)).trim()
+  // Remover separadores de miles que puedan venir como coma
+  const cleaned = rawStr.replace(/,/g, '')
+  let num = Number(cleaned)
   if (!Number.isFinite(num)) return '—'
-  // Heurística: si no hay punto decimal y es grande, asumimos centavos
-  if (!rawStr.includes('.') && Math.abs(num as number) >= 1000) {
-    num = (num as number) / 100
+
+  // Detectar si el string original ya trae parte decimal
+  const hasDecimal = /[.,]\d{1,2}$/.test(rawStr)
+
+  // Escalar sólo si parece venir en centavos (p.ej. 840000 -> 8400, 164900 -> 1649)
+  // Regla: no hay decimales en el string y el absoluto es mayor o igual a 100000
+  if (!hasDecimal && Math.abs(num) >= 100000) {
+    num = num / 100
   }
+
   try {
-    return (num as number).toLocaleString('es-AR', { style: 'currency', currency: currency || 'ARS' })
+    return num.toLocaleString('es-AR', { style: 'currency', currency: currency || 'ARS' })
   } catch {
-    return (num as number).toLocaleString('es-AR')
+    return num.toLocaleString('es-AR')
   }
 }
 
