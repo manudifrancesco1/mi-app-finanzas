@@ -67,12 +67,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     out.details.push({ _preflight: { supabase_host: preProject, pre_count: 'err', pre_error: e?.message || String(e) } })
   }
 
-  const { user_id: bodyUserId, limit = 50, days = 14, from } = (req.body ?? {}) as {
+  const { user_id: bodyUserId, limit = 50, days = 14, from, debug: debugFlag } = (req.body ?? {}) as {
     user_id?: string
     limit?: number
     days?: number
     from?: string
+    debug?: boolean
   }
+  // Echo what came in the body for debugging purposes
+  out.details.push({
+    _body_echo: {
+      keys: Object.keys((req.body ?? {})),
+      debugFlagType: typeof (req.body ?? {}).debug,
+      debugFlagValue: (req.body ?? {}).debug ?? null,
+      parsedDebugFlag: Boolean(debugFlag)
+    }
+  })
   const user_id = bodyUserId || process.env.DEFAULT_USER_ID
   if (!user_id) return res.status(400).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'missing user_id' }] })
 
@@ -83,15 +93,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   }
   const IMAP_HOST = String(process.env.IMAP_HOST)
   const IMAP_PORT = Number(process.env.IMAP_PORT)
-  const IMAP_SECURE = String(process.env.IMAP_SECURE || 'true').toLowerCase() === 'true'
+  const IMAP_SECURE = String(process.env.IMAP_SECURE ?? process.env.IMAP_TLS ?? 'true').toLowerCase() !== 'false'
   const IMAP_USER = String(process.env.IMAP_USER)
   const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD)
+  const IMAP_MAILBOX = String(process.env.IMAP_MAILBOX || 'INBOX')
 
   // Filters (permissive)
-  const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || '').trim()
-  const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || '').trim()
+  const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || 'Alerta de Compras Visa').trim()
+  const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || 'visa.com').trim()
   const fromFilter = (from && String(from).trim()) || fromFilterEnv
   const defaultCurrency = (process.env.EMAIL_SYNC_DEFAULT_CURRENCY || 'ARS').trim()
+
+  if (debugFlag) {
+    out.details.push({
+      _debug: {
+        enabled: true,
+        limit,
+        days,
+        fromFilter,
+        subjectPrefix,
+        mailbox: IMAP_MAILBOX
+      }
+    })
+  }
 
   const debug = {
     scanned: 0,
@@ -101,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     skippedNoSubjectMatch: 0,
     skippedFwdRe: 0,
     examples: [] as { subject: string; fromName?: string; fromAddr?: string }[],
-    filters: { fromFilter: fromFilter || null, subjectPrefix: subjectPrefix || null }
+    filters: { fromFilter: fromFilter || null, subjectPrefix: subjectPrefix || null, mailbox: IMAP_MAILBOX }
   }
 
   const client = new ImapFlow({
@@ -113,7 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   try {
     await client.connect()
-    await client.mailboxOpen('INBOX')
+    await client.mailboxOpen(IMAP_MAILBOX)
 
     const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
     const searchQuery: SearchObject = { since }
@@ -174,7 +198,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // Identificadores IMAP
         const messageId = (parsed.messageId as string | undefined) || (msg.envelope?.messageId as string | undefined) || null
         const provider = 'imap'
-        const imap_mailbox = 'INBOX'
+        const imap_mailbox = IMAP_MAILBOX
         const imap_uid = Number(uid)
 
         // Elegimos objetivo de conflicto: si hay Message-ID lo usamos, sino caemos a UID
@@ -187,7 +211,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           .digest('hex')
 
         // Upsert por UID de IMAP para evitar duplicados reales
-        const { error } = await admin
+        const { data: upData, error: upErr }: { data: any[] | null; error: any } = await admin
           .from('email_transactions')
           .upsert([{
             user_id,
@@ -208,23 +232,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
             merchant: null,
             amount: null,
-            currency: defaultCurrency,
+            currency: defaultCurrency || 'ARS',
             card_last4: null,
             hash,
-          }], { onConflict: conflictTarget, ignoreDuplicates: true })
+          }], { onConflict: conflictTarget, ignoreDuplicates: false })
+          .select()
+
         out.attempted++
 
-        if (error) {
-          // Conflictos de unicidad (ya existe) se ignoran sin contarse como error
-          const msgErr = String(error.message || '')
+        if (debugFlag) {
+          out.details.push({
+            _attempt: {
+              uid,
+              subject,
+              conflictTarget,
+              hasMessageId: Boolean(messageId),
+              imap_uid,
+              row_user: user_id,
+              hash_prefix: hash.slice(0, 12),
+              email_datetime,
+              date_local,
+              from: { name: fromName, addr: fromAddr }
+            }
+          })
+        }
+
+        if (upErr) {
+          const msgErr = String(upErr.message || '')
           if (/duplicate key|unique constraint|conflict/i.test(msgErr)) {
-            // noop: ya existe este registro para este user_id (UID o Message-ID)
+            if (debugFlag) out.details.push({ _result: { uid, status: 'duplicate', message: msgErr } })
           } else {
             out.errors++
-            out.details.push({ uid, subject, error: error.message })
+            if (debugFlag) out.details.push({ _result: { uid, status: 'schema-conflict', message: msgErr } })
+            else out.details.push({ uid, subject, error: msgErr })
           }
         } else {
-          out.inserted++
+          const insertedCount = Array.isArray(upData) ? upData.length : 0
+          out.inserted += insertedCount
+          if (debugFlag) {
+            out.details.push({ _result: { uid, status: insertedCount > 0 ? 'inserted' : 'updated-or-noop', inserted: insertedCount } })
+          }
         }
       } catch (e: any) {
         out.attempted++
@@ -250,5 +297,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(500).json({ ok: false, attempted: out.attempted, inserted: out.inserted, errors: out.errors + 1, details: [{ error: e?.message || String(e) }] })
   } finally {
     try { await client.logout() } catch {}
+    try { await client.close() } catch {}
   }
 }

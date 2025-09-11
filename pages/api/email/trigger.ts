@@ -21,6 +21,7 @@ function withTimeout<T>(p: Promise<T>, ms: number = TIMEOUT_MS, label = 'operati
  *   days?: number
  *   limit?: number
  *   from?: string
+ *   debug?: boolean
  * }
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -34,7 +35,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     days = 14,
     limit = 50,
     from = process.env.EMAIL_SYNC_FROM || '',
-  } = (req.body ?? {}) as { user_id?: string; days?: number; limit?: number; from?: string }
+    debug = false,
+  } = (req.body ?? {}) as { user_id?: string; days?: number; limit?: number; from?: string; debug?: boolean }
 
   if (!user_id) return res.status(400).json({ ok: false, error: 'missing user_id (or set DEFAULT_USER_ID)' })
 
@@ -50,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const syncReq = fetch(`${origin}/api/email/sync`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-email-secret': secret },
-      body: JSON.stringify({ user_id, days, limit, from }),
+      body: JSON.stringify({ user_id, days, limit, from, debug }),
     })
 
     const syncResp = await withTimeout(syncReq, TIMEOUT_MS, 'sync')
