@@ -33,26 +33,39 @@ const normalize = (s: string) =>
 const cleanMerchant = (val: string | null | undefined) => {
   const s = (val || '').trim();
   if (!s) return s as any;
+
   // Normalize internal spaces
   let out = s.replace(/\s+/g, ' ');
 
-  // Stop at any of these metadata markers if they appear after the merchant
+  // Markers that indicate the start of metadata or boilerplate
   const STOP_MARKERS = [
-    'Pais:', 'País:', 'Ciudad:', 'Tarjeta:', 'Autorizacion:', 'Autorización:',
-    'Referencia:', 'Tipo de transaccion:', 'Tipo de transacción:', 'Moneda:', 'Monto:'
+    'País:', 'Pais:', 'Ciudad:', 'Tarjeta:', 'Autorización:', 'Autorizacion:',
+    'Referencia:', 'Tipo de transacción:', 'Tipo de transaccion:', 'Moneda:', 'Monto:',
+    'Importante:', '(puede haber una diferencia', 'Alerta de Compras Visa',
+    '¿Demasiado contenido', 'Demasiado contenido', 'Anular la suscripción',
+    'Suscripción a las alertas', 'Suscripcion a las alertas',
+    'Este correo electrónico se envió', 'Si cree que recibió', 'llame de inmediato'
   ];
+
+  // Cut at the first marker found (case-insensitive)
   for (const mk of STOP_MARKERS) {
     const idx = out.toLowerCase().indexOf(mk.toLowerCase());
-    if (idx > 0) out = out.slice(0, idx).trim();
+    if (idx > 0) {
+      out = out.slice(0, idx).trim();
+      break;
+    }
   }
 
-  // Remove trailing boilerplate phrases that sometimes get appended
-  out = out.replace(/\bAlerta de Compras Visa\b.*$/i, '').trim();
-  out = out.replace(/\bSuscripcion a las alertas.*$/i, '').trim();
-  out = out.replace(/\b¿Demasiado contenido.*$/i, '').trim();
+  // Remove trailing boilerplate separators or long dashes
+  out = out.replace(/[|·•–—-]{2,}.*$/, '').trim();
 
-  // Collapse leftover separators
-  out = out.replace(/[|·•–-]{2,}.*/, '').trim();
+  // If after cleaning we still have something extremely long, hard-truncate at a word boundary
+  const MAX_LEN = 80;
+  if (out.length > MAX_LEN) {
+    const cut = out.slice(0, MAX_LEN);
+    const lastSpace = cut.lastIndexOf(' ');
+    out = (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim();
+  }
 
   return out;
 };
@@ -262,13 +275,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         let parsedLast4: string | null = null;
 
         // Comercio (capture only the merchant name before the next metadata key)
-        let mMerch = bodyText.match(/Comercio:\s*([^\n\r]*?)(?:\s+(?:País|Pais|Ciudad|Tarjeta|Autorización|Autorizacion|Referencia|Tipo de transacción|Tipo de transaccion|Moneda|Monto)\s*:|$)/i);
+        // Try a strict pattern first
+        let mMerch = bodyText.match(
+          /(?:Comercio|Comerciante|Comercio\/Merchant)\s*:\s*([^\n\r]+?)(?=\s+(?:Pa[ií]s|Ciudad|Tarjeta|Autorizaci[oó]n|Referencia|Tipo de transacci[oó]n|Moneda|Monto)\s*:|$)/i
+        );
+
         if (mMerch && mMerch[1]) {
           parsedMerchant = cleanMerchant(mMerch[1]);
         } else {
-          // Fallback: take text after "Comercio:" up to the first period or line break
-          const m2 = bodyText.match(/Comercio:\s*([^\n\r\.]{2,})/i);
-          if (m2 && m2[1]) parsedMerchant = cleanMerchant(m2[1]);
+          // Fallback #1: a lo largo de la línea hasta que aparezca un marcador conocido
+          const m2 = bodyText.match(
+            /Comercio\s*:\s*([A-Za-z0-9 .,'*º°\-&_/]+?)(?=\s+(?:Pa[ií]s|Ciudad|Tarjeta|Autorizaci[oó]n|Referencia|Tipo de transacci[oó]n|Moneda|Monto)\s*:|$)/i
+          );
+          if (m2 && m2[1]) {
+            parsedMerchant = cleanMerchant(m2[1]);
+          } else {
+            // Fallback #2: tomar un tramo corto después de "Comercio:" y luego limpiar
+            const m3 = bodyText.match(/Comercio\s*:\s*([^\n\r]{2,120})/i);
+            if (m3 && m3[1]) {
+              parsedMerchant = cleanMerchant(m3[1]);
+            }
+          }
+        }
+
+        // Final tiny safeguard: if still empty or suspiciously generic, null out
+        if (parsedMerchant) {
+          // avoid clearly non-merchant content leaking in
+          const low = parsedMerchant.toLowerCase();
+          if (/alerta de compras visa|anular la suscrip|este correo electr|llame de inmediato/.test(low)) {
+            parsedMerchant = null;
+          }
         }
 
         // Moneda
