@@ -30,6 +30,13 @@ function formatYMDLocal(d: Date, timeZone: string) {
 const normalize = (s: string) =>
   s ? s.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim().replace(/\s+/g, ' ') : ''
 
+const cleanMerchant = (val: string | null | undefined) => {
+  const s = (val || '').trim();
+  if (!s) return s as any;
+  // Remove trailing metadata blocks like "País:", "Ciudad:", "Tarjeta:", etc.
+  return s.replace(/\s+(?:País|Ciudad|Tarjeta|Autorización|Referencia|Tipo de transacción|Moneda|Monto)\s*:.*/i, '').trim();
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Out | any>) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, attempted: 0, inserted: 0, errors: 0, details: [{ error: 'Method Not Allowed' }] })
 
@@ -237,7 +244,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // Comercio
         const mMerch = bodyText.match(/Comercio:\s*([^\n\r]+)/i);
         if (mMerch) {
-          parsedMerchant = mMerch[1].trim();
+          parsedMerchant = cleanMerchant(mMerch[1]);
         }
 
         // Moneda
