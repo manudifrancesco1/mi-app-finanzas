@@ -16,6 +16,30 @@ type EmailRow = {
   source: string | null
 }
 
+function prettifyMerchant(m: string | null): string {
+  if (!m) return '—'
+  // Si vino el cuerpo entero, cortar en " País:" y limpiar espacios
+  const cut = m.indexOf(' País:')
+  const name = (cut > 0 ? m.slice(0, cut) : m).replace(/\s+/g, ' ').trim()
+  return name || '—'
+}
+
+function formatAmount(val: number | string | null, currency: string | null): string {
+  if (val == null) return '—'
+  const rawStr = typeof val === 'string' ? val : String(val)
+  let num = typeof val === 'string' ? Number(val) : val
+  if (!Number.isFinite(num)) return '—'
+  // Heurística: si no hay punto decimal y es grande, asumimos centavos
+  if (!rawStr.includes('.') && Math.abs(num as number) >= 1000) {
+    num = (num as number) / 100
+  }
+  try {
+    return (num as number).toLocaleString('es-AR', { style: 'currency', currency: currency || 'ARS' })
+  } catch {
+    return (num as number).toLocaleString('es-AR')
+  }
+}
+
 export default function EmailsPage() {
   const router = useRouter()
   const [rows, setRows] = useState<EmailRow[]>([])
@@ -205,11 +229,9 @@ export default function EmailsPage() {
                 </td>
                 {debugAll && <td className="px-3 py-2 break-all text-xs">{r.user_id}</td>}
                 <td className="px-3 py-2">{r.subject}</td>
-                <td className="px-3 py-2">{r.merchant ?? '—'}</td>
+                <td className="px-3 py-2">{prettifyMerchant(r.merchant)}</td>
                 <td className="px-3 py-2 text-right">
-                  {r.amount != null
-                    ? (r.amount / 100).toLocaleString('es-AR', { style: 'currency', currency: r.currency || 'ARS' })
-                    : '—'}
+                  {formatAmount(r.amount as any, r.currency)}
                 </td>
                 <td className="px-3 py-2 text-center">
                   {r.processed ? '✅' : '⏳'}
