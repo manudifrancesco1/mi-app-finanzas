@@ -207,7 +207,9 @@ export default function EmailsPage() {
                 <td className="px-3 py-2">{r.subject}</td>
                 <td className="px-3 py-2">{r.merchant ?? '—'}</td>
                 <td className="px-3 py-2 text-right">
-                  {r.amount != null ? `$${r.amount.toLocaleString('es-AR', { minimumFractionDigits: 2 })} ${r.currency || ''}` : '—'}
+                  {r.amount != null
+                    ? (r.amount / 100).toLocaleString('es-AR', { style: 'currency', currency: r.currency || 'ARS' })
+                    : '—'}
                 </td>
                 <td className="px-3 py-2 text-center">
                   {r.processed ? '✅' : '⏳'}
