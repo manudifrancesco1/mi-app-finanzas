@@ -33,21 +33,16 @@ const normalize = (s: string) =>
 const cleanMerchant = (val: string | null | undefined) => {
   const s = (val || '').trim();
   if (!s) return s as any;
-
-  // Normalize internal spaces
   let out = s.replace(/\s+/g, ' ');
-
-  // Markers that indicate the start of metadata or boilerplate
   const STOP_MARKERS = [
     'País:', 'Pais:', 'Ciudad:', 'Tarjeta:', 'Autorización:', 'Autorizacion:',
     'Referencia:', 'Tipo de transacción:', 'Tipo de transaccion:', 'Moneda:', 'Monto:',
     'Importante:', '(puede haber una diferencia', 'Alerta de Compras Visa',
     '¿Demasiado contenido', 'Demasiado contenido', 'Anular la suscripción',
     'Suscripción a las alertas', 'Suscripcion a las alertas',
-    'Este correo electrónico se envió', 'Si cree que recibió', 'llame de inmediato'
+    'Este correo electrónico se envió', 'Si cree que recibió', 'llame de inmediato',
+    '------------------------------', '----------------', '--', '—', '–'
   ];
-
-  // Cut at the first marker found (case-insensitive)
   for (const mk of STOP_MARKERS) {
     const idx = out.toLowerCase().indexOf(mk.toLowerCase());
     if (idx > 0) {
@@ -55,18 +50,14 @@ const cleanMerchant = (val: string | null | undefined) => {
       break;
     }
   }
-
-  // Remove trailing boilerplate separators or long dashes
   out = out.replace(/[|·•–—-]{2,}.*$/, '').trim();
-
-  // If after cleaning we still have something extremely long, hard-truncate at a word boundary
+  out = out.replace(/\(.*/, '').trim();
   const MAX_LEN = 80;
   if (out.length > MAX_LEN) {
     const cut = out.slice(0, MAX_LEN);
     const lastSpace = cut.lastIndexOf(' ');
     out = (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim();
   }
-
   return out;
 };
 
@@ -253,11 +244,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const parseAmount = (raw: string | null | undefined): number | null => {
           if (!raw) return null;
           let s = String(raw).trim();
-
+          // Cut at first parenthesis or non-amount trail just in case (e.g., "8400.00(puede...")
+          s = s.replace(/\(.*/, '');
           // Remove currency symbols and spaces
           s = s.replace(/[^\d.,-]/g, '');
-
-          // If it looks like 1.234,56 (comma decimal), remove dots (thousands) and change comma to dot
+          // If both separators are present, assume dot thousands + comma decimal
           if (/,/.test(s) && /\./.test(s)) {
             s = s.replace(/\./g, '').replace(/,/g, '.');
           } else if (/,/.test(s) && !/\./.test(s)) {
@@ -265,7 +256,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             s = s.replace(/,/g, '.');
           }
           const n = Number(s);
-          return Number.isFinite(n) ? n : null;
+          if (!Number.isFinite(n)) return null;
+          return n;
         };
 
         // Extract merchant, currency, amount and card last4
@@ -315,7 +307,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
         // Monto
         // Matches "Monto: 1649.00", "Monto: $ 1.971.000,00", etc.
-        const mAmt = bodyText.match(/Monto:\s*\$?\s*([0-9][\d.,]*)/i);
+        const mAmt = bodyText.match(/Monto:\s*\$?\s*([0-9][\d.,]*)(?=\s*(?:\(|$))/i);
         if (mAmt) {
           parsedAmount = parseAmount(mAmt[1]);
         }
