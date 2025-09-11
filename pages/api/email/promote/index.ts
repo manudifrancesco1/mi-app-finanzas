@@ -24,16 +24,27 @@ const BODY_REGEX_1 =
   /Comercio:\s*(.+?)\s*-\s*Moneda:\s*([A-Z]{3})\s*-\s*Monto:\s*\$\s*([\d\.\,]+)\s*-\s*Terminación\s*(\d+)/i
 
 const BODY_REGEX_2 =
-  /Consumo autorizado[\s\S]*?Monto:\s*\$\s*([\d\.\,]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?(?:en|Comercio:)\s*([A-Z0-9\*\s\.\-]+)[\s\S]*?Terminación\s*(\d+)/i
+  /Consumo autorizado[\s\S]*?Monto:\s*\$?\s*([\d.,]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?(?:en|Comercio:)\s*([A-Z0-9ÁÉÍÓÚÜÑáéíóúüñ&\*\s\.\-]+)[\s\S]*?Terminación\s*(\d{3,4})/i
 
 const BODY_REGEX_3 =
-  /Comercio:\s*([^\n\r]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?Monto:\s*\$?\s*([\d\.,]+)/i
+  /Comercio:\s*([^\n\r]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?Monto:\s*\$?\s*([\d.,]+)/i
 
 const LAST4_REGEX =
-  /(Terminación|Tarjeta)\s*:?\s*(\d{3,4})/i
+  /(Terminación|Tarjeta)\s*:?[\s]*([0-9]{3,4})/i
 
-const normalizeAmount = (raw: string) =>
-  Number(raw.replace(/\./g, '').replace(',', '.'))
+const normalizeAmount = (raw: string) => {
+  const s = (raw || '').trim().replace(/\s/g, '')
+  // If only comma → decimal comma (e.g., 1.234,56 or 123,45)
+  if (s.includes(',') && !s.includes('.')) {
+    return Number(s.replace(/\./g, '').replace(',', '.'))
+  }
+  // If only dot → decimal dot (e.g., 1649.00)
+  if (s.includes('.') && !s.includes(',')) {
+    return Number(s)
+  }
+  // If both present, assume dot thousands + comma decimal
+  return Number(s.replace(/\./g, '').replace(',', '.'))
+}
 
 const txHash = (user_id: string, date_local: string, merchant: string, amount: number, currency: string) =>
   createHash('sha256').update(`${user_id}|${date_local}|${merchant}|${amount}|${currency}`).digest('hex')
@@ -100,6 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const IMAP_USER = String(process.env.IMAP_USER || '')
   const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD || '')
   const FROM_FILTER = (process.env.EMAIL_SYNC_FROM || 'visa.com').trim()
+  const SUBJECT_FILTER = (process.env.EMAIL_SYNC_SUBJECT || 'Alerta de Compras Visa').toLowerCase()
 
   // 1) Traer pendientes
   const { data: pending, error: qErr } = await admin
@@ -187,7 +199,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             if (!hay.includes(FROM_FILTER.toLowerCase())) continue
 
             const subj = parsed.subject || ''
-            const bodyTxt = (parsed.text || '').trim() || (parsed.html ? (parsed.html as string).replace(/<[^>]+>/g, ' ') : '')
+            if (!subj.toLowerCase().includes(SUBJECT_FILTER)) continue
+
+            const bodyTxt = ((parsed.text || '') + ' ' + (parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ') : '')).trim()
 
             // Intentos de extracción en orden: subject, body variantes
             let mSubj2 = subj.match(VISA_SUBJECT_REGEX)
@@ -246,7 +260,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         .from('email_transactions')
         .update({
           merchant,
-          currency,
+          currency: (currency || 'ARS').toString().trim().toUpperCase(),
           amount,
           card_last4: last4,
           processed: true,
@@ -268,7 +282,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           user_id,
           date: date_local,
           amount: amount!,
-          currency: (currency || 'ARS').trim(),
+          currency: (currency || 'ARS').toString().trim().toUpperCase(),
           expense_mode: 'variable',
           description: merchant!,
           hash: dedupe,
