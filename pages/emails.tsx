@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
-import { supabase } from '@/lib/supabaseClient'
+import { createClient } from '@supabase/supabase-js'
 
 type EmailRow = {
   id: number
@@ -15,6 +15,12 @@ type EmailRow = {
   processed: boolean | null
   source: string | null
 }
+
+// Local browser Supabase client to avoid undefined imports
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL as string,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
+)
 
 function prettifyMerchant(m: string | null): string {
   if (!m) return '—'
@@ -77,7 +83,14 @@ export default function EmailsPage() {
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!session) router.replace('/login')
     })
-    return () => sub.subscription.unsubscribe()
+    return () => {
+      try {
+        // Optional chaining in case the subscription object shape differs
+        // or the component unmounts before it's set.
+        // @ts-ignore
+        sub?.subscription?.unsubscribe?.()
+      } catch {}
+    }
   }, [router])
 
   const load = async () => {
