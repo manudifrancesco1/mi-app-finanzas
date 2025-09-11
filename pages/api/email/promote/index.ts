@@ -32,6 +32,13 @@ const BODY_REGEX_3 =
 const LAST4_REGEX =
   /(Terminación|Tarjeta)\s*:?[\s]*([0-9]{3,4})/i
 
+const cleanMerchant = (val: string | null | undefined) => {
+  const s = (val || '').trim();
+  if (!s) return s;
+  // Corta al primer campo típico que no forma parte del nombre del comercio
+  return s.replace(/\s+(?:País|Ciudad|Tarjeta|Autorización|Referencia|Tipo de transacción|Moneda|Monto)\s*:.*/i, '').trim();
+}
+
 const normalizeAmount = (raw: string) => {
   const s = (raw || '').trim().replace(/\s/g, '')
   // If only comma → decimal comma (e.g., 1.234,56 or 123,45)
@@ -163,7 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       // a) Intentar parsear del subject
       const mSubj = subject.match(VISA_SUBJECT_REGEX)
       if (mSubj) {
-        merchant = mSubj[1].trim()
+        merchant = cleanMerchant(mSubj[1]);
         currency = (mSubj[2] || row.currency || 'ARS').trim()
         amount = normalizeAmount(mSubj[3])
         last4 = mSubj[4].trim()
@@ -210,14 +217,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             let mBody3 = bodyTxt.match(BODY_REGEX_3)
 
             if (mSubj2) {
-              merchant = (mSubj2[1] || '').trim()
+              merchant = cleanMerchant(mSubj2[1]);
               currency = (mSubj2[2] || row.currency || 'ARS').trim()
               amount = normalizeAmount(mSubj2[3] || '')
               last4 = (mSubj2[4] || '').trim()
               matched = true
             } else if (mBody1) {
               // BODY_REGEX_1: [1]=merchant [2]=currency [3]=amount
-              merchant = (mBody1[1] || '').trim()
+              merchant = cleanMerchant(mBody1[1]);
               currency = (mBody1[2] || row.currency || 'ARS').trim()
               amount = normalizeAmount(mBody1[3] || '')
               // last4 puede venir en otra línea
@@ -228,12 +235,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               // BODY_REGEX_2: [1]=amount [2]=currency [3]=merchant [4]=last4
               amount = normalizeAmount(mBody2[1] || '')
               currency = (mBody2[2] || row.currency || 'ARS').trim()
-              merchant = (mBody2[3] || '').trim()
+              merchant = cleanMerchant(mBody2[3]);
               last4 = (mBody2[4] || '').trim()
               matched = true
             } else if (mBody3) {
               // BODY_REGEX_3: [1]=merchant [2]=currency [3]=amount
-              merchant = (mBody3[1] || '').trim()
+              merchant = cleanMerchant(mBody3[1]);
               currency = (mBody3[2] || row.currency || 'ARS').trim()
               amount = normalizeAmount(mBody3[3] || '')
               const mL4 = bodyTxt.match(LAST4_REGEX)
