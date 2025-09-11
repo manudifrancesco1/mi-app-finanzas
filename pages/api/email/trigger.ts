@@ -13,7 +13,7 @@ function withTimeout<T>(p: Promise<T>, ms: number = TIMEOUT_MS, label = 'operati
 /**
  * Trigger unificado SIN exponer secretos al cliente:
  * 1) Llama a /api/email/sync (lee IMAP y guarda en email_transactions)
- * 2) Llama a /api/email/promote (sube pendientes a transactions)
+ * 2) Llama a /api/email/promote pasando user_id, limit, debug
  *
  * Body opcional:
  * {
@@ -70,9 +70,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!syncResp.ok) return res.status(syncResp.status).json({ ok: false, ...out })
 
     // 2) PROMOTE con timeout (más corto)
-    const promoteReq = fetch(`${origin}/api/email/promote?limit=${encodeURIComponent(String(limit))}`, {
+    const promoteReq = fetch(`${origin}/api/email/promote`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-email-secret': secret },
+      body: JSON.stringify({
+        user_id,
+        limit,
+        debug,
+      }),
     })
 
     const promoteResp = await withTimeout(promoteReq, TIMEOUT_MS, 'promote')
