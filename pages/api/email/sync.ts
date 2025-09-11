@@ -285,7 +285,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             amount: parsedAmount,
             currency: parsedCurrency || defaultCurrency || 'ARS',
             card_last4: parsedLast4,
-            processed: Boolean(parsedMerchant && parsedAmount != null),
+            processed: false,
 
             hash,
           }], { onConflict: conflictTarget, ignoreDuplicates: false })
