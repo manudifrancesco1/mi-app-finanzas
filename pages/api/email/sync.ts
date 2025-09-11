@@ -33,8 +33,28 @@ const normalize = (s: string) =>
 const cleanMerchant = (val: string | null | undefined) => {
   const s = (val || '').trim();
   if (!s) return s as any;
-  // Remove trailing metadata blocks like "País:", "Ciudad:", "Tarjeta:", etc.
-  return s.replace(/\s+(?:País|Ciudad|Tarjeta|Autorización|Referencia|Tipo de transacción|Moneda|Monto)\s*:.*/i, '').trim();
+  // Normalize internal spaces
+  let out = s.replace(/\s+/g, ' ');
+
+  // Stop at any of these metadata markers if they appear after the merchant
+  const STOP_MARKERS = [
+    'Pais:', 'País:', 'Ciudad:', 'Tarjeta:', 'Autorizacion:', 'Autorización:',
+    'Referencia:', 'Tipo de transaccion:', 'Tipo de transacción:', 'Moneda:', 'Monto:'
+  ];
+  for (const mk of STOP_MARKERS) {
+    const idx = out.toLowerCase().indexOf(mk.toLowerCase());
+    if (idx > 0) out = out.slice(0, idx).trim();
+  }
+
+  // Remove trailing boilerplate phrases that sometimes get appended
+  out = out.replace(/\bAlerta de Compras Visa\b.*$/i, '').trim();
+  out = out.replace(/\bSuscripcion a las alertas.*$/i, '').trim();
+  out = out.replace(/\b¿Demasiado contenido.*$/i, '').trim();
+
+  // Collapse leftover separators
+  out = out.replace(/[|·•–-]{2,}.*/, '').trim();
+
+  return out;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Out | any>) {
@@ -241,10 +261,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         let parsedAmount: number | null = null;
         let parsedLast4: string | null = null;
 
-        // Comercio
-        const mMerch = bodyText.match(/Comercio:\s*([^\n\r]+)/i);
-        if (mMerch) {
+        // Comercio (capture only the merchant name before the next metadata key)
+        let mMerch = bodyText.match(/Comercio:\s*([^\n\r]*?)(?:\s+(?:País|Pais|Ciudad|Tarjeta|Autorización|Autorizacion|Referencia|Tipo de transacción|Tipo de transaccion|Moneda|Monto)\s*:|$)/i);
+        if (mMerch && mMerch[1]) {
           parsedMerchant = cleanMerchant(mMerch[1]);
+        } else {
+          // Fallback: take text after "Comercio:" up to the first period or line break
+          const m2 = bodyText.match(/Comercio:\s*([^\n\r\.]{2,})/i);
+          if (m2 && m2[1]) parsedMerchant = cleanMerchant(m2[1]);
         }
 
         // Moneda
