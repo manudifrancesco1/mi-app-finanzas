@@ -244,10 +244,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const parseAmount = (raw: string | null | undefined): number | null => {
           if (!raw) return null;
           let s = String(raw).trim();
-          // Cut at first parenthesis or non-amount trail just in case (e.g., "8400.00(puede...")
+          // Trim after first parenthesis or any non-amount annotation (e.g., "8400.00(puede...")
           s = s.replace(/\(.*/, '');
-          // Remove currency symbols and spaces
+          // Keep only digits, dot, comma, minus
           s = s.replace(/[^\d.,-]/g, '');
+          // Guard: strip leading/trailing dots/commas
+          s = s.replace(/^[.,]+/, '').replace(/[.,]+$/, '');
           // If both separators are present, assume dot thousands + comma decimal
           if (/,/.test(s) && /\./.test(s)) {
             s = s.replace(/\./g, '').replace(/,/g, '.');
@@ -316,12 +318,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const mLastTarj = bodyText.match(/Tarjeta:\s*(\d{4})/i) || bodyText.match(/terminaci[oó]n\s*(\d{4})/i);
         if (mLastTarj) parsedLast4 = mLastTarj[1];
 
-        // hash requerido por el esquema actual (aunque deduplicamos por UID)
-        const hash = createHash('sha256')
-          .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
-          .digest('hex')
+        // Build a content-based hash to dedupe the same alert even if IMAP UID changes
+        const buildContentHash = (
+          userId: string,
+          dateLocal: string,
+          merchant: string | null,
+          amount: number | null,
+          currency: string | null,
+          last4: string | null
+        ) => {
+          const key = [
+            userId || '',
+            dateLocal || '',
+            (merchant || '').toUpperCase(),
+            amount != null ? String(amount) : '',
+            (currency || '').toUpperCase(),
+            last4 || ''
+          ].join('|')
+          return createHash('sha256').update(key).digest('hex')
+        }
 
-        // Upsert por UID de IMAP para evitar duplicados reales
+        // Prefer a content-based hash; fall back to UID-based hash if we lack critical fields
+        let hash_mode: 'content' | 'uid' = 'content'
+        let hash = buildContentHash(
+          user_id,
+          date_local,
+          parsedMerchant,
+          parsedAmount,
+          (parsedCurrency || defaultCurrency || 'ARS'),
+          parsedLast4
+        )
+
+        // If we couldn't parse enough content, fall back to a UID-tied hash to avoid collisions
+        if (!parsedMerchant || parsedAmount == null || !(parsedCurrency || defaultCurrency)) {
+          hash_mode = 'uid'
+          hash = createHash('sha256')
+            .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
+            .digest('hex')
+        }
+
+        // Upsert deduping by (user_id, hash) — index: email_tx_user_hash_key
         const { data: upData, error: upErr }: { data: any[] | null; error: any } = await admin
           .from('email_transactions')
           .upsert([{
@@ -342,12 +378,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
             merchant: parsedMerchant,
             amount: parsedAmount,
-            currency: parsedCurrency || defaultCurrency || 'ARS',
+            currency: (parsedCurrency || defaultCurrency || 'ARS').toUpperCase(),
             card_last4: parsedLast4,
             processed: false,
 
             hash,
-          }], { onConflict: conflictTarget, ignoreDuplicates: false })
+          }], { onConflict: 'user_id,hash', ignoreDuplicates: false })
           .select()
 
         out.attempted++
@@ -357,7 +393,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             _attempt: {
               uid,
               subject,
-              conflictTarget,
+              conflictTarget: 'user_id,hash',
+              hash_mode,
               hasMessageId: Boolean(messageId),
               imap_uid,
               row_user: user_id,
