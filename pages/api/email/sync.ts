@@ -4,6 +4,7 @@ import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
+// Gmail ID extraction fallback: When available, the Gmail message id will be extracted from msg.gmailMessageId or msg['x-gm-msgid'].
 
 type Out = {
   ok: boolean
@@ -129,6 +130,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD)
   const IMAP_MAILBOX = String(process.env.IMAP_MAILBOX || 'INBOX')
 
+  // --- Incremental state (process only new UIDs) ---
+  const mailboxKey = IMAP_MAILBOX;
+  let lastUid = 0;
+  try {
+    const { data: st } = await admin
+      .from('email_sync_state')
+      .select('last_uid')
+      .eq('user_id', user_id)
+      .eq('mailbox', mailboxKey)
+      .limit(1)
+      .maybeSingle();
+    lastUid = Number(st?.last_uid || 0);
+    out.details.push({ _state: { mailbox: mailboxKey, last_uid: lastUid } });
+  } catch (e:any) {
+    out.details.push({ _state_error: e?.message || String(e) });
+  }
+
   // Filters (permissive)
   const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || 'Alerta de Compras Visa').trim()
   const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || 'visa.com').trim()
@@ -170,29 +188,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     await client.connect()
     await client.mailboxOpen(IMAP_MAILBOX)
 
-    const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
-    const searchQuery: SearchObject = { since }
-    // IMPORTANTE: No filtramos por "from" aquí (suele fallar por address exacto). Filtramos luego del parse.
-
-    const uidsRes = await client.search(searchQuery)
-    const uids = Array.isArray(uidsRes) ? uidsRes : []
-    if (uids.length === 0) {
-      out.details.push({ _summary: { ...debug, info: 'no uids for date range' } })
-      return res.status(200).json(out)
+    const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000);
+    const searchQuery: SearchObject = { since };
+    // IMPORTANTE: No filtramos por "from" aquí. Filtramos luego del parse.
+    const uidsRes = await client.search(searchQuery);
+    const allUids = Array.isArray(uidsRes) ? uidsRes.map(Number) : [];
+    // Filtrar por incremental UID > lastUid
+    const newUids = allUids.filter(u => u > lastUid);
+    if (newUids.length === 0) {
+      out.details.push({ _summary: { ...debug, info: 'no new uids above last_uid', last_uid: lastUid } });
+      return res.status(200).json(out);
     }
 
-    // Recorrer de más reciente a más antiguo, intentando upsert hasta alcanzar "limit" verdaderos (post-filtro)
-    const take = Math.min(Number(limit), uids.length)
-    const rev = [...uids].reverse() // recent first
+    // Recorrer de más reciente a más antiguo (UID mayor = más nuevo)
+    const take = Math.min(Number(limit), newUids.length);
+    const rev = [...newUids].sort((a,b) => b - a); // highest UID first
+    let maxSeenUid = lastUid;
 
     for (const uid of rev) {
+      if (uid > maxSeenUid) maxSeenUid = uid;
       if (out.attempted >= take) break
       try {
         debug.scanned++
-        const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
+        const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true });
         if (!msg || !msg.source) continue
 
         const parsed = await simpleParser(msg.source as any)
+        // Gmail message id (if available in this provider)
+        const gmailMsgIdRaw = (msg as any)?.gmailMessageId ?? (msg as any)?.['x-gm-msgid'] ?? null;
+        const gmail_msgid = gmailMsgIdRaw != null ? String(gmailMsgIdRaw) : null;
         const subject = parsed.subject || ''
         if (/^\s*(fwd:|re:)/i.test(subject)) { debug.skippedFwdRe++; continue }
 
@@ -419,6 +443,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             card_last4: parsedLast4,
             processed: false,
 
+            gmail_msgid: gmail_msgid,
             hash,
           }], { onConflict: 'user_id,hash', ignoreDuplicates: false })
           .select()
@@ -468,6 +493,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         out.errors++
         out.details.push({ error: e?.message || String(e) })
       }
+    }
+
+    // Persist incremental pointer if we advanced
+    try {
+      if (typeof maxSeenUid !== 'undefined' && maxSeenUid > lastUid) {
+        await admin
+          .from('email_sync_state')
+          .upsert([{ user_id, mailbox: mailboxKey, last_uid: maxSeenUid }], { onConflict: 'user_id,mailbox', ignoreDuplicates: false });
+        out.details.push({ _state_updated: { mailbox: mailboxKey, from: lastUid, to: maxSeenUid } });
+      }
+    } catch (e:any) {
+      out.details.push({ _state_update_error: e?.message || String(e) });
     }
 
     // Postflight count
