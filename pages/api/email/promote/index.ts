@@ -27,7 +27,7 @@ const BODY_REGEX_2 =
   /Consumo autorizado[\s\S]*?Monto:\s*\$?\s*([\d.,]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?(?:en|Comercio:)\s*([A-Z0-9ÁÉÍÓÚÜÑáéíóúüñ&\*\s\.\-]+)[\s\S]*?Terminación\s*(\d{3,4})/i
 
 const BODY_REGEX_3 =
-  /Comercio:\s*([^\n\r]+)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?Monto:\s*\$?\s*([\d.,]+)/i
+  /Comercio:\s*([^\n\r]+?)(?=\s+(?:Moneda|Monto|Pa[ií]s|Ciudad|Tarjeta|Autorizaci[oó]n)\s*:)[\s\S]*?Moneda:\s*([A-Z]{3})[\s\S]*?Monto:\s*\$?\s*([\d.,]+)/i
 
 const LAST4_REGEX =
   /(Terminación|Tarjeta)\s*:?[\s]*([0-9]{3,4})/i
@@ -35,8 +35,16 @@ const LAST4_REGEX =
 const cleanMerchant = (val: string | null | undefined) => {
   const s = (val || '').trim();
   if (!s) return s;
-  // Corta al primer campo típico que no forma parte del nombre del comercio
-  return s.replace(/\s+(?:País|Ciudad|Tarjeta|Autorización|Referencia|Tipo de transacción|Moneda|Monto)\s*:.*/i, '').trim();
+  let out = s.replace(/\s+/g, ' ');
+  out = out.replace(/\s+(?:País|Pais|Ciudad|Tarjeta|Autorización|Autorizacion|Referencia|Tipo de transacción|Tipo de transaccion|Moneda|Monto)\s*:.*/i, '').trim();
+  out = out.replace(/[|·•–—-]{2,}.*$/, '').trim();
+  out = out.replace(/\(.*/, '').trim();
+  if (out.length > 80) {
+    const cut = out.slice(0, 80);
+    const lastSpace = cut.lastIndexOf(' ');
+    out = (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim();
+  }
+  return out;
 }
 
 const normalizeAmount = (raw: string) => {

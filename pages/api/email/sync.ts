@@ -4,6 +4,7 @@ import { ImapFlow, type SearchObject } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
 import { createHash } from 'crypto'
+// Gmail ID extraction fallback: When available, the Gmail message id will be extracted from msg.gmailMessageId or msg['x-gm-msgid'].
 
 type Out = {
   ok: boolean
@@ -33,21 +34,16 @@ const normalize = (s: string) =>
 const cleanMerchant = (val: string | null | undefined) => {
   const s = (val || '').trim();
   if (!s) return s as any;
-
-  // Normalize internal spaces
   let out = s.replace(/\s+/g, ' ');
-
-  // Markers that indicate the start of metadata or boilerplate
   const STOP_MARKERS = [
     'País:', 'Pais:', 'Ciudad:', 'Tarjeta:', 'Autorización:', 'Autorizacion:',
     'Referencia:', 'Tipo de transacción:', 'Tipo de transaccion:', 'Moneda:', 'Monto:',
     'Importante:', '(puede haber una diferencia', 'Alerta de Compras Visa',
     '¿Demasiado contenido', 'Demasiado contenido', 'Anular la suscripción',
     'Suscripción a las alertas', 'Suscripcion a las alertas',
-    'Este correo electrónico se envió', 'Si cree que recibió', 'llame de inmediato'
+    'Este correo electrónico se envió', 'Si cree que recibió', 'llame de inmediato',
+    '------------------------------', '----------------', '--', '—', '–'
   ];
-
-  // Cut at the first marker found (case-insensitive)
   for (const mk of STOP_MARKERS) {
     const idx = out.toLowerCase().indexOf(mk.toLowerCase());
     if (idx > 0) {
@@ -55,18 +51,14 @@ const cleanMerchant = (val: string | null | undefined) => {
       break;
     }
   }
-
-  // Remove trailing boilerplate separators or long dashes
   out = out.replace(/[|·•–—-]{2,}.*$/, '').trim();
-
-  // If after cleaning we still have something extremely long, hard-truncate at a word boundary
+  out = out.replace(/\(.*/, '').trim();
   const MAX_LEN = 80;
   if (out.length > MAX_LEN) {
     const cut = out.slice(0, MAX_LEN);
     const lastSpace = cut.lastIndexOf(' ');
     out = (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim();
   }
-
   return out;
 };
 
@@ -138,6 +130,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const IMAP_PASSWORD = String(process.env.IMAP_PASSWORD)
   const IMAP_MAILBOX = String(process.env.IMAP_MAILBOX || 'INBOX')
 
+  // --- Incremental state (process only new UIDs) ---
+  const mailboxKey = IMAP_MAILBOX;
+  let lastUid = 0;
+  try {
+    const { data: st } = await admin
+      .from('email_sync_state')
+      .select('last_uid')
+      .eq('user_id', user_id)
+      .eq('mailbox', mailboxKey)
+      .limit(1)
+      .maybeSingle();
+    lastUid = Number(st?.last_uid || 0);
+    out.details.push({ _state: { mailbox: mailboxKey, last_uid: lastUid } });
+  } catch (e:any) {
+    out.details.push({ _state_error: e?.message || String(e) });
+  }
+
   // Filters (permissive)
   const subjectPrefix = (process.env.EMAIL_SYNC_SUBJECT_PREFIX || 'Alerta de Compras Visa').trim()
   const fromFilterEnv = (process.env.EMAIL_SYNC_FROM || 'visa.com').trim()
@@ -179,29 +188,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     await client.connect()
     await client.mailboxOpen(IMAP_MAILBOX)
 
-    const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
-    const searchQuery: SearchObject = { since }
-    // IMPORTANTE: No filtramos por "from" aquí (suele fallar por address exacto). Filtramos luego del parse.
-
-    const uidsRes = await client.search(searchQuery)
-    const uids = Array.isArray(uidsRes) ? uidsRes : []
-    if (uids.length === 0) {
-      out.details.push({ _summary: { ...debug, info: 'no uids for date range' } })
-      return res.status(200).json(out)
+    const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000);
+    const searchQuery: SearchObject = { since };
+    // IMPORTANTE: No filtramos por "from" aquí. Filtramos luego del parse.
+    const uidsRes = await client.search(searchQuery);
+    const allUids = Array.isArray(uidsRes) ? uidsRes.map(Number) : [];
+    // Filtrar por incremental UID > lastUid
+    const newUids = allUids.filter(u => u > lastUid);
+    if (newUids.length === 0) {
+      out.details.push({ _summary: { ...debug, info: 'no new uids above last_uid', last_uid: lastUid } });
+      return res.status(200).json(out);
     }
 
-    // Recorrer de más reciente a más antiguo, intentando upsert hasta alcanzar "limit" verdaderos (post-filtro)
-    const take = Math.min(Number(limit), uids.length)
-    const rev = [...uids].reverse() // recent first
+    // Recorrer de más reciente a más antiguo (UID mayor = más nuevo)
+    const take = Math.min(Number(limit), newUids.length);
+    const rev = [...newUids].sort((a,b) => b - a); // highest UID first
+    let maxSeenUid = lastUid;
 
     for (const uid of rev) {
+      if (uid > maxSeenUid) maxSeenUid = uid;
       if (out.attempted >= take) break
       try {
         debug.scanned++
-        const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true })
+        const msg: any = await client.fetchOne(uid, { source: true, envelope: true, internalDate: true });
         if (!msg || !msg.source) continue
 
         const parsed = await simpleParser(msg.source as any)
+        // Gmail message id (if available in this provider)
+        const gmailMsgIdRaw = (msg as any)?.gmailMessageId ?? (msg as any)?.['x-gm-msgid'] ?? null;
+        const gmail_msgid = gmailMsgIdRaw != null ? String(gmailMsgIdRaw) : null;
         const subject = parsed.subject || ''
         if (/^\s*(fwd:|re:)/i.test(subject)) { debug.skippedFwdRe++; continue }
 
@@ -253,11 +268,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const parseAmount = (raw: string | null | undefined): number | null => {
           if (!raw) return null;
           let s = String(raw).trim();
-
-          // Remove currency symbols and spaces
+          // Trim after first parenthesis or any non-amount annotation (e.g., "8400.00(puede...")
+          s = s.replace(/\(.*/, '');
+          // Keep only digits, dot, comma, minus
           s = s.replace(/[^\d.,-]/g, '');
-
-          // If it looks like 1.234,56 (comma decimal), remove dots (thousands) and change comma to dot
+          // Guard: strip leading/trailing dots/commas
+          s = s.replace(/^[.,]+/, '').replace(/[.,]+$/, '');
+          // If both separators are present, assume dot thousands + comma decimal
           if (/,/.test(s) && /\./.test(s)) {
             s = s.replace(/\./g, '').replace(/,/g, '.');
           } else if (/,/.test(s) && !/\./.test(s)) {
@@ -265,7 +282,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             s = s.replace(/,/g, '.');
           }
           const n = Number(s);
-          return Number.isFinite(n) ? n : null;
+          if (!Number.isFinite(n)) return null;
+          return n;
         };
 
         // Extract merchant, currency, amount and card last4
@@ -315,7 +333,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
         // Monto
         // Matches "Monto: 1649.00", "Monto: $ 1.971.000,00", etc.
-        const mAmt = bodyText.match(/Monto:\s*\$?\s*([0-9][\d.,]*)/i);
+        const mAmt = bodyText.match(/Monto:\s*\$?\s*([0-9][\d.,]*)(?=\s*(?:\(|$))/i);
         if (mAmt) {
           parsedAmount = parseAmount(mAmt[1]);
         }
@@ -324,12 +342,83 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const mLastTarj = bodyText.match(/Tarjeta:\s*(\d{4})/i) || bodyText.match(/terminaci[oó]n\s*(\d{4})/i);
         if (mLastTarj) parsedLast4 = mLastTarj[1];
 
-        // hash requerido por el esquema actual (aunque deduplicamos por UID)
-        const hash = createHash('sha256')
-          .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
-          .digest('hex')
+        // Build a content-based hash to dedupe the same alert even if IMAP UID changes
+        const buildContentHash = (
+          userId: string,
+          dateLocal: string,
+          merchant: string | null,
+          amount: number | null,
+          currency: string | null,
+          subject?: string | null
+        ) => {
+          // Do NOT include card last4 in the hash (can be missing/inconsistent across copies)
+          const baseMerchant = (merchant || '').toUpperCase().trim();
+          const baseAmount = amount != null ? String(amount) : '';
+          const baseCurrency = (currency || '').toUpperCase().trim();
+          // Include a normalized subject fallback to stabilize when merchant/amount parsing fails
+          const normSubject = (subject || '')
+            .normalize('NFKD')
+            .replace(/\p{Diacritic}/gu, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 140);
+          const key = [
+            userId || '',
+            dateLocal || '',
+            baseMerchant || '(unknown-merchant)',
+            baseAmount || '(unknown-amount)',
+            baseCurrency || '(unknown-currency)',
+            normSubject || '(no-subject)'
+          ].join('|');
+          return createHash('sha256').update(key).digest('hex');
+        }
 
-        // Upsert por UID de IMAP para evitar duplicados reales
+        // Always use a stable content hash (never UID-based), using subject as fallback
+        let hash_mode: 'content' = 'content';
+        const effectiveCurrency = (parsedCurrency || defaultCurrency || 'ARS');
+        const hash = buildContentHash(
+          user_id,
+          date_local,
+          parsedMerchant,
+          parsedAmount,
+          effectiveCurrency,
+          subject
+        );
+
+        // Guard against duplicates even if hash changes in the future: check by (user_id, date_local, merchant, amount, currency)
+        if (parsedMerchant && parsedAmount != null) {
+          const { data: existsRows, error: existsErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('date_local', date_local)
+            .eq('merchant', parsedMerchant)
+            .eq('amount', parsedAmount)
+            .eq('currency', effectiveCurrency.toUpperCase())
+            .limit(1);
+
+          if (!existsErr && Array.isArray(existsRows) && existsRows.length > 0) {
+            // Already captured — record as duplicate and skip insert
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: {
+                  uid,
+                  status: 'duplicate-exists',
+                  by: 'content-check',
+                  existing_id: existsRows[0].id,
+                  merchant: parsedMerchant,
+                  amount: parsedAmount,
+                  currency: effectiveCurrency,
+                  date_local
+                }
+              });
+            }
+            continue;
+          }
+        }
+
+        // Upsert deduping by (user_id, hash) — index: email_tx_user_hash_key
         const { data: upData, error: upErr }: { data: any[] | null; error: any } = await admin
           .from('email_transactions')
           .upsert([{
@@ -350,12 +439,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
             merchant: parsedMerchant,
             amount: parsedAmount,
-            currency: parsedCurrency || defaultCurrency || 'ARS',
+            currency: effectiveCurrency.toUpperCase(),
             card_last4: parsedLast4,
             processed: false,
 
+            gmail_msgid: gmail_msgid,
             hash,
-          }], { onConflict: conflictTarget, ignoreDuplicates: false })
+          }], { onConflict: 'user_id,hash', ignoreDuplicates: false })
           .select()
 
         out.attempted++
@@ -365,7 +455,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             _attempt: {
               uid,
               subject,
-              conflictTarget,
+              conflictTarget: 'user_id,hash',
+              hash_mode: 'content',
               hasMessageId: Boolean(messageId),
               imap_uid,
               row_user: user_id,
@@ -402,6 +493,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         out.errors++
         out.details.push({ error: e?.message || String(e) })
       }
+    }
+
+    // Persist incremental pointer if we advanced
+    try {
+      if (typeof maxSeenUid !== 'undefined' && maxSeenUid > lastUid) {
+        await admin
+          .from('email_sync_state')
+          .upsert([{ user_id, mailbox: mailboxKey, last_uid: maxSeenUid }], { onConflict: 'user_id,mailbox', ignoreDuplicates: false });
+        out.details.push({ _state_updated: { mailbox: mailboxKey, from: lastUid, to: maxSeenUid } });
+      }
+    } catch (e:any) {
+      out.details.push({ _state_update_error: e?.message || String(e) });
     }
 
     // Postflight count

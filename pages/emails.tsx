@@ -7,7 +7,6 @@ type EmailRow = {
   user_id: string
   date_local: string | null
   email_datetime: string | null
-  subject: string | null
   merchant: string | null
   amount: number | null
   currency: string | null
@@ -67,11 +66,9 @@ export default function EmailsPage() {
   const [syncing, setSyncing] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
-  const [debugAll, setDebugAll] = useState(false)
 
   const [processedFilter, setProcessedFilter] = useState<'all' | 'pending' | 'done'>('all')
   const [search, setSearch] = useState('')
-  const [limitRows, setLimitRows] = useState(100)
 
   // proteger por login
   useEffect(() => {
@@ -103,13 +100,12 @@ export default function EmailsPage() {
 
       let q = supabase
         .from('email_transactions')
-        .select('id,user_id,date_local,email_datetime,subject,merchant,amount,currency,card_last4,processed,source')
+        .select('id,user_id,date_local,email_datetime,merchant,amount,currency,card_last4,processed,source')
         .order('email_datetime', { ascending: false })
-        .limit(limitRows)
+        .limit(100)
 
-      if (!debugAll) {
-        q = q.eq('user_id', uid!)
-      }
+      q = q.eq('user_id', uid!)
+
       if (processedFilter === 'pending') {
         q = q.eq('processed', false)
       } else if (processedFilter === 'done') {
@@ -132,7 +128,7 @@ export default function EmailsPage() {
     }
   }
 
-  useEffect(() => { load() }, [debugAll, processedFilter, limitRows])
+  useEffect(() => { load() }, [processedFilter])
 
   const trigger = async () => {
     setSyncing(true)
@@ -143,20 +139,57 @@ export default function EmailsPage() {
       if (!uid) {
         throw new Error('No hay sesión activa')
       }
-      const r = await fetch('/api/email/trigger', {
+
+      const SECRET = process.env.NEXT_PUBLIC_EMAIL_INGEST_SECRET as string
+      if (!SECRET || !SECRET.trim()) {
+        throw new Error('Falta NEXT_PUBLIC_EMAIL_INGEST_SECRET')
+      }
+
+      // 1) SYNC: leer emails y guardarlos en email_transactions
+      const syncRes = await fetch('/api/email/sync', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, limit: 25, days: 7, debug: true }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-email-secret': SECRET,
+        },
+        body: JSON.stringify({ user_id: uid, limit: 200, days: 30, debug: true }),
       })
-      const data = await r.json().catch(() => ({} as any))
-      if (!r.ok) throw new Error(data?.error || 'Error')
-      const attempted = Number(data?.sync?.attempted ?? 0)
-      const inserted  = Number(data?.sync?.inserted  ?? 0)
-      const errors    = Number(data?.sync?.errors    ?? 0)
-      setMsg(`Sync OK: intentados ${attempted}, insertados ${inserted}, errores ${errors}`)
+      const syncJson = await syncRes.json().catch(() => ({} as any))
+      if (!syncRes.ok) {
+        const err = syncJson?.details?.[0]?.error || syncJson?.error || 'Error en sync'
+        throw new Error(err)
+      }
+
+      // 2) PROMOTE: parsear pendientes y volcarlos en transactions
+      const promoteRes = await fetch('/api/email/promote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-email-secret': SECRET,
+        },
+        body: JSON.stringify({ user_id: uid, limit: 80 }),
+      })
+      const promoteJson = await promoteRes.json().catch(() => ({} as any))
+      if (!promoteRes.ok) {
+        const err = promoteJson?.details?.[0]?.error || promoteJson?.error || 'Error en promote'
+        throw new Error(err)
+      }
+
+      const attempted = Number(syncJson?.attempted ?? 0)
+      const inserted  = Number(syncJson?.inserted  ?? 0)
+      const syncErrors = Number(syncJson?.errors ?? 0)
+
+      const updated = Number(promoteJson?.updated ?? 0)
+      const promoteErrors = Number(promoteJson?.errors ?? 0)
+
+      setMsg(
+        `Sync: intentados ${attempted}, insertados ${inserted}, errores ${syncErrors} · ` +
+        `Promote: actualizados ${updated}, errores ${promoteErrors}`
+      )
+
       await load()
     } catch (e: any) {
-      setMsg(`Sync falló: ${e?.message || 'Error'}`)
+      setMsg(`Sync/Promote falló: ${e?.message || 'Error'}`)
     } finally {
       setSyncing(false)
     }
@@ -175,41 +208,13 @@ export default function EmailsPage() {
             className="px-3 py-2 rounded border text-sm"
             style={{ minWidth: 220 }}
           />
-          <select
-            value={processedFilter}
-            onChange={e => setProcessedFilter(e.target.value as any)}
-            className="px-2 py-2 rounded border text-sm"
-            title="Filtrar por estado"
-          >
-            <option value="all">Todos</option>
-            <option value="pending">Sólo pendientes</option>
-            <option value="done">Sólo procesados</option>
-          </select>
-          <select
-            value={limitRows}
-            onChange={e => setLimitRows(Number(e.target.value))}
-            className="px-2 py-2 rounded border text-sm"
-            title="Cantidad a mostrar"
-          >
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-          </select>
-
-          <button
-            onClick={() => setDebugAll(v => !v)}
-            className={`px-3 py-2 rounded text-sm ${debugAll ? 'bg-purple-600 text-white' : 'bg-gray-100'}`}
-            title="Modo debug: ver emails de todos los usuarios"
-          >
-            {debugAll ? 'Debug: ALL' : 'Debug: OFF'}
-          </button>
           <button
             onClick={trigger}
             disabled={syncing}
             className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:opacity-50"
-            title="Leer últimos correos y agregarlos a email_transactions"
+            title="Leer últimos correos y promover a transacciones"
           >
-            {syncing ? 'Leyendo…' : 'Leer mails'}
+            {syncing ? 'Procesando…' : 'Leer y promover'}
           </button>
           <button
             onClick={load}
@@ -228,12 +233,6 @@ export default function EmailsPage() {
         </div>
       )}
 
-      <div className="mb-2 text-xs text-gray-500">
-        Filtro: {processedFilter === 'all' ? 'todos' : processedFilter === 'pending' ? 'pendientes' : 'procesados'}
-        {search.trim() ? ` · búsqueda: “${search.trim()}”` : ''} · límite: {limitRows}
-        {debugAll ? ' · debug: ALL' : ''}
-      </div>
-
       {msg && <div className="mb-3 text-sm text-gray-700">{msg}</div>}
 
       <div className="overflow-x-auto border rounded-lg">
@@ -241,8 +240,6 @@ export default function EmailsPage() {
           <thead className="bg-gray-50">
             <tr>
               <th className="px-3 py-2 text-left">Fecha</th>
-              {debugAll && <th className="px-3 py-2 text-left">User</th>}
-              <th className="px-3 py-2 text-left">Asunto</th>
               <th className="px-3 py-2 text-left">Comercio</th>
               <th className="px-3 py-2 text-right">Monto</th>
               <th className="px-3 py-2 text-center">Proc.</th>
@@ -254,8 +251,6 @@ export default function EmailsPage() {
                 <td className="px-3 py-2 whitespace-nowrap">
                   {(r.date_local || r.email_datetime || '').slice(0,10)}
                 </td>
-                {debugAll && <td className="px-3 py-2 break-all text-xs">{r.user_id}</td>}
-                <td className="px-3 py-2">{r.subject}</td>
                 <td className="px-3 py-2">{prettifyMerchant(r.merchant)}</td>
                 <td className="px-3 py-2 text-right">
                   {formatAmount(r.amount as any, r.currency)}
@@ -266,7 +261,7 @@ export default function EmailsPage() {
               </tr>
             ))}
             {rows.length === 0 && !loading && (
-              <tr><td colSpan={debugAll ? 6 : 5} className="px-3 py-6 text-center text-gray-500">Sin resultados</td></tr>
+              <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-500">Sin resultados</td></tr>
             )}
           </tbody>
         </table>
