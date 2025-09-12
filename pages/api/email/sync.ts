@@ -325,36 +325,73 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           merchant: string | null,
           amount: number | null,
           currency: string | null,
-          last4: string | null
+          subject?: string | null
         ) => {
+          // Do NOT include card last4 in the hash (can be missing/inconsistent across copies)
+          const baseMerchant = (merchant || '').toUpperCase().trim();
+          const baseAmount = amount != null ? String(amount) : '';
+          const baseCurrency = (currency || '').toUpperCase().trim();
+          // Include a normalized subject fallback to stabilize when merchant/amount parsing fails
+          const normSubject = (subject || '')
+            .normalize('NFKD')
+            .replace(/\p{Diacritic}/gu, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 140);
           const key = [
             userId || '',
             dateLocal || '',
-            (merchant || '').toUpperCase(),
-            amount != null ? String(amount) : '',
-            (currency || '').toUpperCase(),
-            last4 || ''
-          ].join('|')
-          return createHash('sha256').update(key).digest('hex')
+            baseMerchant || '(unknown-merchant)',
+            baseAmount || '(unknown-amount)',
+            baseCurrency || '(unknown-currency)',
+            normSubject || '(no-subject)'
+          ].join('|');
+          return createHash('sha256').update(key).digest('hex');
         }
 
-        // Prefer a content-based hash; fall back to UID-based hash if we lack critical fields
-        let hash_mode: 'content' | 'uid' = 'content'
-        let hash = buildContentHash(
+        // Always use a stable content hash (never UID-based), using subject as fallback
+        let hash_mode: 'content' = 'content';
+        const effectiveCurrency = (parsedCurrency || defaultCurrency || 'ARS');
+        const hash = buildContentHash(
           user_id,
           date_local,
           parsedMerchant,
           parsedAmount,
-          (parsedCurrency || defaultCurrency || 'ARS'),
-          parsedLast4
-        )
+          effectiveCurrency,
+          subject
+        );
 
-        // If we couldn't parse enough content, fall back to a UID-tied hash to avoid collisions
-        if (!parsedMerchant || parsedAmount == null || !(parsedCurrency || defaultCurrency)) {
-          hash_mode = 'uid'
-          hash = createHash('sha256')
-            .update(`${user_id}|${provider}|${imap_mailbox}|${imap_uid}|${messageId || ''}|${date_local}|${subject}`)
-            .digest('hex')
+        // Guard against duplicates even if hash changes in the future: check by (user_id, date_local, merchant, amount, currency)
+        if (parsedMerchant && parsedAmount != null) {
+          const { data: existsRows, error: existsErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('date_local', date_local)
+            .eq('merchant', parsedMerchant)
+            .eq('amount', parsedAmount)
+            .eq('currency', effectiveCurrency.toUpperCase())
+            .limit(1);
+
+          if (!existsErr && Array.isArray(existsRows) && existsRows.length > 0) {
+            // Already captured — record as duplicate and skip insert
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: {
+                  uid,
+                  status: 'duplicate-exists',
+                  by: 'content-check',
+                  existing_id: existsRows[0].id,
+                  merchant: parsedMerchant,
+                  amount: parsedAmount,
+                  currency: effectiveCurrency,
+                  date_local
+                }
+              });
+            }
+            continue;
+          }
         }
 
         // Upsert deduping by (user_id, hash) — index: email_tx_user_hash_key
@@ -378,7 +415,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
             merchant: parsedMerchant,
             amount: parsedAmount,
-            currency: (parsedCurrency || defaultCurrency || 'ARS').toUpperCase(),
+            currency: effectiveCurrency.toUpperCase(),
             card_last4: parsedLast4,
             processed: false,
 
@@ -394,7 +431,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               uid,
               subject,
               conflictTarget: 'user_id,hash',
-              hash_mode,
+              hash_mode: 'content',
               hasMessageId: Boolean(messageId),
               imap_uid,
               row_user: user_id,
