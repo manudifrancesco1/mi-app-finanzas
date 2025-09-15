@@ -12,13 +12,10 @@ import {
 } from '@heroicons/react/24/outline'
 
 const tabs = [
-  { href: '/',           label: 'Inicio',      Icon: HomeIcon },
-  { href: '/accounts',   label: 'Cuentas',     Icon: BanknotesIcon },
-  { href: '/expenses',   label: 'Gastos',      Icon: ClipboardIcon },
-  { href: '/incomes',    label: 'Ingresos',    Icon: CurrencyDollarIcon },
-  { href: '/budgets',    label: 'Presupuestos',Icon: ChartBarIcon },
-  { href: '/settings',   label: 'Más',         Icon: Cog6ToothIcon },
-  { href: '/emails',     label: 'Emails',      Icon: EnvelopeIcon }
+  { href: '/',           label: 'Inicio',   Icon: HomeIcon },
+  { href: '/expenses',   label: 'Gastos',   Icon: ClipboardIcon },
+  { href: '/incomes',    label: 'Ingresos', Icon: CurrencyDollarIcon },
+  { href: '/emails',     label: 'Emails',   Icon: EnvelopeIcon }
 ]
 
 export default function NavBar() {

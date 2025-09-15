@@ -21,6 +21,7 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@next/swc-darwin-arm64": "^15.5.3",
     "@types/mailparser": "^3.4.6",
     "@types/react": "^18.0.38",
     "@types/react-dom": "^18.0.11",

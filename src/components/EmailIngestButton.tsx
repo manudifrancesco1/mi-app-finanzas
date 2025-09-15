@@ -1,13 +1,10 @@
-// components/EmailIngestButton.tsx
 import { useState } from "react"
 
 export default function EmailIngestButton({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<any>(null)
 
   async function handleClick() {
     setLoading(true)
-    setResult(null)
 
     try {
       // 1) Sync
@@ -32,28 +29,21 @@ export default function EmailIngestButton({ userId }: { userId: string }) {
       })
       const promoteJson = await promoteRes.json()
 
-      setResult({ sync: syncJson, promote: promoteJson })
+      console.info('[EmailIngestButton]', { sync: syncJson, promote: promoteJson })
     } catch (e: any) {
-      setResult({ error: e.message })
+      console.error('[EmailIngestButton] error', e)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div>
-      <button
-        onClick={handleClick}
-        disabled={loading}
-        className="px-4 py-2 bg-green-600 text-white rounded"
-      >
-        {loading ? "Procesando..." : "Leer emails Visa"}
-      </button>
-      {result && (
-        <pre className="mt-2 p-2 bg-gray-100 text-xs overflow-x-auto">
-          {JSON.stringify(result, null, 2)}
-        </pre>
-      )}
-    </div>
+    <button
+      onClick={handleClick}
+      disabled={loading}
+      className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 active:translate-y-px disabled:opacity-50"
+    >
+      {loading ? "Procesando..." : "Leer emails Visa"}
+    </button>
   )
 }

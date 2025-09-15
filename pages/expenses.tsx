@@ -541,14 +541,12 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                     }}
                     className="cursor-pointer flex justify-between p-3 bg-white rounded shadow-sm hover:bg-gray-50 transition"
                   >
-                    {/* Categoría (sin badge) */}
-                    <span className="flex-1 flex items-center gap-2">
-                      {tx.category.name}
-                    </span>
-                    {/* Subcategoría */}
-                    <span className="flex-1">{tx.subcategory?.name || '-'}</span>
                     {/* Descripción */}
-                    <span className="flex-1">{tx.description || '-'}</span>
+                    <span className="flex-[2] truncate">{tx.description || '-'}</span>
+                    {/* Categoría (sin badge) */}
+                    <span className="flex-1 truncate">{tx.category.name}</span>
+                    {/* Subcategoría */}
+                    <span className="flex-1 truncate">{tx.subcategory?.name || '-'}</span>
                     {/* Tipo de pago */}
                     <span className="w-24 text-center">
                       {tx.payment_type === 'credito' ? (

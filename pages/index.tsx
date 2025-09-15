@@ -5,6 +5,7 @@ import React, { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import ExpenseModal from '../src/components/ExpenseModal'
 import IncomeModal from '../src/components/IncomeModal'
+import EmailIngestButton from '@/components/EmailIngestButton'
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -78,6 +79,20 @@ const Dashboard: NextPage = () => {
   const [showIncomeModal, setShowIncomeModal] = useState(false)
   const [prevBalances, setPrevBalances] = useState<{ ym: string; balance: number }[]>([])
   const [ytdBalance, setYtdBalance] = useState(0)
+
+  const [uncategorized, setUncategorized] = useState<Array<{
+    id: number;
+    date: string;
+    description: string | null;
+    amount: number;
+    currency?: string | null;
+    category_id: string | null;
+    subcategory_id: string | null;
+  }>>([])
+  const [categories, setCategories] = useState<Array<{ id: string; name: string }>>([])
+  const [subcategories, setSubcategories] = useState<Array<{ id: string; name: string; category_id?: string | null }>>([])
+  const [savingIds, setSavingIds] = useState<Record<number, boolean>>({})
+  const [selection, setSelection] = useState<Record<number, { category_id: string | null; subcategory_id: string | null }>>({})
 
   const toggleCategory = (name: string) =>
     setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
@@ -174,6 +189,50 @@ const Dashboard: NextPage = () => {
       const fixedArr = toArr(fixedMap).sort((a,b) => b.total - a.total); setFixedExpensesByCategory(fixedArr); setTotalFixedExpenses(fixedArr.reduce((s, x) => s + x.total, 0))
       const varArr   = toArr(variableMap).sort((a,b) => b.total - a.total); setVariableExpensesByCategory(varArr); setTotalVariableExpenses(varArr.reduce((s, x) => s + x.total, 0))
       const subCats: Record<string, CategoryAmount[]> = {}; Object.entries(subByCat).forEach(([c,m])=>subCats[c]=toArr(m).sort((a,b) => b.total - a.total)); setVariableSubcategoriesByCategory(subCats)
+
+      // Catálogo de categorías y subcategorías
+      const { data: cats } = await supabase
+        .from('categories')
+        .select('id,name')
+        .order('name', { ascending: true })
+
+      const { data: subs } = await supabase
+        .from('subcategories')
+        .select('id,name,category_id')
+        .order('name', { ascending: true })
+
+      // De-duplicate by normalized name to evitar repetidos visibles (base de datos puede tener entradas duplicadas)
+      const normalize = (s: string) => (s || '').trim().toLowerCase()
+      const uniqueCatMap = new Map<string, { id: string; name: string }>()
+      ;(cats || []).forEach((c: any) => {
+        const key = normalize(c.name)
+        if (!uniqueCatMap.has(key)) uniqueCatMap.set(key, { id: String(c.id), name: c.name })
+      })
+      const catsUnique = Array.from(uniqueCatMap.values())
+
+      // Subcategorías: asegurar strings y mantener todas, ya que pueden repetirse nombres en distintas categorías
+      const subsNorm = (subs || []).map((s: any) => ({ id: String(s.id), name: s.name, category_id: s.category_id ? String(s.category_id) : null }))
+
+      setCategories(catsUnique)
+      setSubcategories(subsNorm)
+
+      // Gastos sin categoría para el mes seleccionado (ignorar los que sí tienen categoría aunque falte la subcategoría)
+      const { data: unc } = await supabase
+        .from('transactions')
+        .select('id,date,description,amount,currency,category_id,subcategory_id')
+        .eq('user_id', uid)
+        .gte('date', start)
+        .lte('date', end)
+        .is('category_id', null)
+        .order('date', { ascending: false })
+      setUncategorized((unc || []) as any)
+
+      // Inicializar selección local con lo que ya tengan (para que aparezca preseleccionado)
+      const sel: Record<number, { category_id: string | null; subcategory_id: string | null }> = {}
+      ;(unc || []).forEach((t: any) => {
+        sel[t.id] = { category_id: t.category_id ?? null, subcategory_id: t.subcategory_id ?? null }
+      })
+      setSelection(sel)
 
       // --- Balances de meses anteriores y acumulado ---
       const prev1 = ymAddMonths(selectedMonth, -1)
@@ -284,6 +343,94 @@ const Dashboard: NextPage = () => {
     fetchData()
   }, [selectedMonth, sessionChecked])
 
+  // --- Helper functions for categorization ---
+  const getMonthRange = (ym: string) => {
+    const [y, m] = ym.split('-').map(Number)
+    const start = `${y}-${String(m).padStart(2, '0')}-01`
+    const end = `${y}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`
+    return { start, end }
+  }
+
+  const humanDate = (iso: string) => {
+    try {
+      const d = new Date(iso)
+      return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })
+    } catch { return iso }
+  }
+
+  const updateSelection = (id: number, field: 'category_id'|'subcategory_id', value: string | null) => {
+    setSelection(prev => ({ ...prev, [id]: { ...(prev[id] || { category_id: null, subcategory_id: null }), [field]: value } }))
+  }
+
+  // --- Helpers for creating categories and subcategories ---
+  const NEW_CATEGORY_VALUE = '__new_cat__'
+  const NEW_SUBCATEGORY_VALUE = '__new_sub__'
+
+  const createCategory = async (): Promise<{ id: string; name: string } | null> => {
+    const name = window.prompt('Nueva categoría')?.trim()
+    if (!name) return null
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .insert({ name })
+        .select('id,name')
+        .single()
+      if (error) throw error
+      const created = { id: String(data.id), name: data.name }
+      setCategories(prev => {
+        const exists = prev.some(c => c.name.trim().toLowerCase() === created.name.trim().toLowerCase())
+        return exists ? prev : [...prev, created].sort((a,b) => a.name.localeCompare(b.name))
+      })
+      return created
+    } catch (e:any) {
+      alert(e?.message || 'No se pudo crear la categoría')
+      return null
+    }
+  }
+
+  const createSubcategory = async (categoryId: string): Promise<{ id: string; name: string; category_id: string } | null> => {
+    const name = window.prompt('Nueva subcategoría')?.trim()
+    if (!name) return null
+    try {
+      const { data, error } = await supabase
+        .from('subcategories')
+        .insert({ name, category_id: categoryId })
+        .select('id,name,category_id')
+        .single()
+      if (error) throw error
+      const created = { id: String(data.id), name: data.name, category_id: String(data.category_id) }
+      setSubcategories(prev => [...prev, created].sort((a,b) => a.name.localeCompare(b.name)))
+      return created
+    } catch (e:any) {
+      alert(e?.message || 'No se pudo crear la subcategoría')
+      return null
+    }
+  }
+
+  const saveCategorization = async (id: number) => {
+    const sel = selection[id] || { category_id: null, subcategory_id: null }
+    if (!sel.category_id) return alert('Elegí una categoría primero.')
+    setSavingIds(prev => ({ ...prev, [id]: true }))
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .update({
+          category_id: sel.category_id,
+          subcategory_id: sel.subcategory_id ?? null,
+          expense_mode: 'variable'
+        })
+        .eq('id', id)
+      if (error) throw error
+
+      // Remover de la lista local
+      setUncategorized(prev => prev.filter(t => t.id !== id))
+    } catch (e:any) {
+      alert(e?.message || String(e))
+    } finally {
+      setSavingIds(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
   if (sessionChecked === null) return null
 
   const netVar = totalVariableExpenses - devolucionesTotal
@@ -360,102 +507,293 @@ const Dashboard: NextPage = () => {
         </div>
 
         {/* Cards */}
-        <main className="p-4 pb-24 grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-          {/* Balance */}
-          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
-            <header className="flex items-center mb-4">
-              <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
-              <h3 className="text-lg font-semibold">Balance</h3>
-            </header>
-            <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
-              <Amount value={balance} />
-            </p>
-            <div className="mt-4 border-t pt-3 text-sm">
-              <ul className="space-y-1">
-                {prevBalances.map(({ ym, balance }) => (
-                  <li key={ym} className="flex justify-between">
-                    <span className="text-gray-500">{shortMonthLabel(ym)}</span>
-                    <Amount value={Math.abs(balance)} negative={balance < 0} />
+        <main className="mx-auto max-w-screen-xl p-4 pb-24 grid gap-4 grid-cols-1 lg:grid-cols-3">
+          {/* Column 1: Balance + Ingresos */}
+          <div className="space-y-4 lg:col-span-1">
+            {/* Balance */}
+            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
+              <header className="flex items-center mb-4">
+                <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
+                <h3 className="text-lg font-semibold">Balance</h3>
+              </header>
+              <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
+                <Amount value={balance} />
+              </p>
+              <div className="mt-4 border-t pt-3 text-sm">
+                <ul className="space-y-1">
+                  {prevBalances.map(({ ym, balance }) => (
+                    <li key={ym} className="flex justify-between">
+                      <span className="text-gray-500">{shortMonthLabel(ym)}</span>
+                      <Amount value={Math.abs(balance)} negative={balance < 0} />
+                    </li>
+                  ))}
+                  <li className="flex justify-between pt-1 border-t mt-2">
+                    <span className="font-medium">Acumulado {selectedMonth.split('-')[0]}</span>
+                    <Amount value={Math.abs(ytdBalance)} negative={ytdBalance < 0} />
                   </li>
-                ))}
-                <li className="flex justify-between pt-1 border-t mt-2">
-                  <span className="font-medium">Acumulado {selectedMonth.split('-')[0]}</span>
-                  <Amount value={Math.abs(ytdBalance)} negative={ytdBalance < 0} />
-                </li>
-              </ul>
-            </div>
-          </section>
-
-          {/* Ingresos */}
-          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
-            <header className="flex items-center mb-4">
-              <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
-              <h3 className="text-lg font-semibold">Ingresos</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
-            <ul className="divide-y space-y-1">
-              {incomesByCategory.map(cat => (
-                <li key={cat.name} className="py-1 flex justify-between text-sm">
-                  <span>{cat.name}</span>
-                  <Amount className="text-right" value={cat.total} />
-                </li>
-              ))}
-              {devolucionesTotal>0 && (
-                <li className="py-1 flex justify-between text-sm text-red-600">
-                  <span>Devoluciones</span>
-                  <Amount className="text-right" value={devolucionesTotal} negative />
-                </li>
-              )}
-            </ul>
-          </section>
-
-          {/* Gastos Fijos */}
-          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
-            <header className="flex items-center mb-4">
-              <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
-              <h3 className="text-lg font-semibold">Gastos Fijos</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
-            <ul className="divide-y space-y-1">
-              {fixedExpensesByCategory.map(cat => (
-                <li key={cat.name} className="py-1 flex justify-between text-sm">
-                  <span>{cat.name}</span>
-                  <Amount className="text-right" value={cat.total} />
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          {/* Gastos Variables */}
-          <section className="bg-white rounded-2xl shadow-sm p-6 flex flex-col">
-            <header className="flex items-center mb-4">
-              <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
-              <h3 className="text-lg font-semibold">Gastos Variables</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
-            <ul className="divide-y space-y-1">
-              {variableExpensesByCategory.map(cat => (
-                <li key={cat.name}>
-                  <button
-                    onClick={() => toggleCategory(cat.name)}
-                    className="w-full flex justify-between text-sm py-1"
-                  >
+                </ul>
+              </div>
+            </section>
+            {/* Ingresos */}
+            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
+              <header className="flex items-center mb-4">
+                <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
+                <h3 className="text-lg font-semibold">Ingresos</h3>
+              </header>
+              <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
+              <ul className="divide-y space-y-1">
+                {incomesByCategory.map(cat => (
+                  <li key={cat.name} className="py-1 flex justify-between text-sm">
                     <span>{cat.name}</span>
                     <Amount className="text-right" value={cat.total} />
-                  </button>
-                  {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
-                    <ul className="pl-4 space-y-1">
-                      {variableSubcategoriesByCategory[cat.name].map(sub => (
-                        <li key={sub.name} className="flex justify-between text-xs py-1">
-                          <span className="italic">{sub.name}</span>
-                          <Amount className="text-right" value={sub.total} />
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
+                  </li>
+                ))}
+                {devolucionesTotal>0 && (
+                  <li className="py-1 flex justify-between text-sm text-red-600">
+                    <span>Devoluciones</span>
+                    <Amount className="text-right" value={devolucionesTotal} negative />
+                  </li>
+                )}
+              </ul>
+            </section>
+          </div>
+          {/* Column 2: Gastos Fijos + Gastos Variables */}
+          <div className="space-y-4 lg:col-span-1">
+            {/* Gastos Fijos */}
+            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
+              <header className="flex items-center mb-4">
+                <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
+                <h3 className="text-lg font-semibold">Gastos Fijos</h3>
+              </header>
+              <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
+              <ul className="divide-y space-y-1">
+                {fixedExpensesByCategory.map(cat => (
+                  <li key={cat.name} className="py-1 flex justify-between text-sm">
+                    <span>{cat.name}</span>
+                    <Amount className="text-right" value={cat.total} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+            {/* Gastos Variables */}
+            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
+              <header className="flex items-center mb-4">
+                <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
+                <h3 className="text-lg font-semibold">Gastos Variables</h3>
+              </header>
+              <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
+              <ul className="divide-y space-y-1">
+                {variableExpensesByCategory.map(cat => (
+                  <li key={cat.name}>
+                    <button
+                      onClick={() => toggleCategory(cat.name)}
+                      className="w-full flex justify-between text-sm py-1"
+                    >
+                      <span>{cat.name}</span>
+                      <Amount className="text-right" value={cat.total} />
+                    </button>
+                    {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
+                      <ul className="pl-4 space-y-1">
+                        {variableSubcategoriesByCategory[cat.name].map(sub => (
+                          <li key={sub.name} className="flex justify-between text-xs py-1">
+                            <span className="italic">{sub.name}</span>
+                            <Amount className="text-right" value={sub.total} />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
+          {/* Column 3: Gastos sin categoría */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
+            <header className="sticky top-0 z-10 bg-white pb-2 mb-2 flex items-center justify-between border-b">
+              <h3 className="text-lg font-semibold">Gastos sin categoría (mes)</h3>
+              <div className="shrink-0">
+                <EmailIngestButton />
+              </div>
+            </header>
+
+            {uncategorized.length === 0 ? (
+              <p className="text-sm text-gray-500">No hay pendientes este mes 🎉</p>
+            ) : (
+              <>
+                {/* Mobile-first list (phones) */}
+                <ul className="sm:hidden space-y-3">
+                  {uncategorized.map((tx) => {
+                    const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
+                    const subsForCat = sel.category_id ? subcategories.filter((s) => s.category_id === sel.category_id) : []
+                    return (
+                      <li key={tx.id} className="bg-white rounded-xl shadow ring-1 ring-black/5 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs text-gray-500 leading-none">{humanDate(tx.date)}</p>
+                            <p className="text-sm font-medium truncate mt-1">{tx.description || '—'}</p>
+                          </div>
+                          <p className="text-right font-semibold tabular-nums">${formatARS(tx.amount)}</p>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-2">
+                          <label className="block text-xs text-gray-500">Categoría</label>
+                          <select
+                            className="w-full border rounded-lg px-3 py-2 text-base min-h-[44px] bg-white"
+                            value={sel.category_id || ''}
+                            onChange={async (e) => {
+                              const val = e.target.value || null
+                              if (val === NEW_CATEGORY_VALUE) {
+                                const created = await createCategory()
+                                if (created) {
+                                  updateSelection(tx.id, 'category_id', created.id)
+                                  updateSelection(tx.id, 'subcategory_id', null)
+                                }
+                                return
+                              }
+                              updateSelection(tx.id, 'category_id', val)
+                              updateSelection(tx.id, 'subcategory_id', null)
+                            }}
+                          >
+                            <option value="">Elegí…</option>
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                            <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
+                          </select>
+
+                          <label className="block text-xs text-gray-500 mt-2">Subcategoría <span className="text-gray-400">(opcional)</span></label>
+                          <select
+                            className="w-full border rounded-lg px-3 py-2 text-base min-h-[44px] bg-white disabled:bg-gray-100"
+                            value={sel.subcategory_id || ''}
+                            onChange={async (e) => {
+                              const val = e.target.value || null
+                              if (val === NEW_SUBCATEGORY_VALUE && sel.category_id) {
+                                const created = await createSubcategory(sel.category_id)
+                                if (created) {
+                                  updateSelection(tx.id, 'subcategory_id', created.id)
+                                }
+                                return
+                              }
+                              updateSelection(tx.id, 'subcategory_id', val)
+                            }}
+                            disabled={!sel.category_id}
+                          >
+                            <option value="">—</option>
+                            {subsForCat.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                            {sel.category_id && <option value={NEW_SUBCATEGORY_VALUE}>+ Nueva subcategoría…</option>}
+                          </select>
+
+                          <button
+                            onClick={() => saveCategorization(tx.id)}
+                            disabled={!!savingIds[tx.id] || !selection[tx.id]?.category_id}
+                            className="mt-3 w-full px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {savingIds[tx.id] ? 'Guardando…' : 'Guardar'}
+                          </button>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+
+                {/* Desktop table (from sm and up) */}
+                <div className="hidden sm:block overflow-x-auto -mx-2 sm:mx-0">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-gray-500">
+                        <th className="px-2 py-2">Fecha</th>
+                        <th className="px-2 py-2">Descripción</th>
+                        <th className="px-2 py-2 text-right">Monto</th>
+                        <th className="px-2 py-2">Categoría</th>
+                        <th className="px-2 py-2">Subcategoría</th>
+                        <th className="px-2 py-2"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {uncategorized.map((tx) => {
+                        const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
+                        const subsForCat = sel.category_id ? subcategories.filter((s) => s.category_id === sel.category_id) : []
+                        return (
+                          <tr key={tx.id}>
+                            <td className="px-2 py-2 whitespace-nowrap">{humanDate(tx.date)}</td>
+                            <td className="px-2 py-2">{tx.description || '—'}</td>
+                            <td className="px-2 py-2 text-right tabular-nums">${formatARS(tx.amount)}</td>
+                            <td className="px-2 py-2">
+                              <select
+                                className="border rounded-md px-2 py-1 text-sm"
+                                value={sel.category_id || ''}
+                                onChange={async (e) => {
+                                  const val = e.target.value || null
+                                  if (val === NEW_CATEGORY_VALUE) {
+                                    const created = await createCategory()
+                                    if (created) {
+                                      updateSelection(tx.id, 'category_id', created.id)
+                                      updateSelection(tx.id, 'subcategory_id', null)
+                                    }
+                                    return
+                                  }
+                                  updateSelection(tx.id, 'category_id', val)
+                                  updateSelection(tx.id, 'subcategory_id', null)
+                                }}
+                              >
+                                <option value="">Elegí…</option>
+                                {categories.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                                <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
+                              </select>
+                            </td>
+                            <td className="px-2 py-2">
+                              <select
+                                className="border rounded-md px-2 py-1 text-sm"
+                                value={sel.subcategory_id || ''}
+                                onChange={async (e) => {
+                                  const val = e.target.value || null
+                                  if (val === NEW_SUBCATEGORY_VALUE && sel.category_id) {
+                                    const created = await createSubcategory(sel.category_id)
+                                    if (created) {
+                                      updateSelection(tx.id, 'subcategory_id', created.id)
+                                    }
+                                    return
+                                  }
+                                  updateSelection(tx.id, 'subcategory_id', val)
+                                }}
+                                disabled={!sel.category_id}
+                              >
+                                <option value="">(opcional)</option>
+                                {subsForCat.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.name}
+                                  </option>
+                                ))}
+                                {sel.category_id && <option value={NEW_SUBCATEGORY_VALUE}>+ Nueva subcategoría…</option>}
+                              </select>
+                            </td>
+                            <td className="px-2 py-2 text-right">
+                              <button
+                                onClick={() => saveCategorization(tx.id)}
+                                disabled={!!savingIds[tx.id] || !selection[tx.id]?.category_id}
+                                className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs disabled:opacity-50"
+                              >
+                                {savingIds[tx.id] ? 'Guardando…' : 'Guardar'}
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </section>
         </main>
         <div className="py-3 text-center">
