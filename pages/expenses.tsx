@@ -26,33 +26,6 @@ const Expenses: NextPage = () => {
   const [payInputs, setPayInputs] = useState<Record<string, string>>({})
   const [extraMonths, setExtraMonths] = useState<string[]>([])
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
-  const [syncingEmails, setSyncingEmails] = useState(false)
-  const [syncMsg, setSyncMsg] = useState<string | null>(null)
-  const triggerEmailSync = async () => {
-    setSyncingEmails(true)
-    setSyncMsg(null)
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const uid = session?.user?.id
-      if (!uid) throw new Error('No hay sesión activa')
-      const r = await fetch('/api/email/trigger', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ user_id: uid, limit: 25, days: 7 }),
-      })
-      const data = await r.json().catch(() => ({} as any))
-      if (!r.ok) throw new Error(data?.error || 'Error')
-      const attempted = Number(data?.sync?.attempted ?? 0)
-      const inserted  = Number(data?.sync?.inserted  ?? 0)
-      const errors    = Number(data?.sync?.errors    ?? 0)
-      setSyncMsg(`Emails: intentados ${attempted}, insertados ${inserted}, errores ${errors}`)
-      await loadTxs()
-    } catch (e: any) {
-      setSyncMsg(`Sync falló: ${e?.message || 'Error'}`)
-    } finally {
-      setSyncingEmails(false)
-    }
-  }
 
   const fixedCategories = [
     'Alquiler',
@@ -352,84 +325,75 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
 
   return (
     <main className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Gastos</h1>
-        <div className="flex items-center gap-2">
-          <div className="bg-gray-100 rounded-full p-1">
-            <button
-              className={`px-3 py-1 rounded-full text-sm ${modeTab === 'variable' ? 'bg-white shadow' : ''}`}
-              onClick={() => setModeTab('variable')}
-            >
-              Variables
-            </button>
-            <button
-              className={`px-3 py-1 rounded-full text-sm ${modeTab === 'fixed' ? 'bg-white shadow' : ''}`}
-              onClick={() => setModeTab('fixed')}
-            >
-              Fijos
-            </button>
+      <div className="sticky top-0 z-20 -mx-4 px-4 pt-2 pb-3 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold">Gastos</h1>
+          <div className="flex items-center gap-2">
+            <div className="bg-gray-100 rounded-full p-1">
+              <button
+                className={`px-3 py-1.5 rounded-full text-sm ${modeTab === 'variable' ? 'bg-white shadow' : ''}`}
+                onClick={() => setModeTab('variable')}
+              >
+                Variables
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded-full text-sm ${modeTab === 'fixed' ? 'bg-white shadow' : ''}`}
+                onClick={() => setModeTab('fixed')}
+              >
+                Fijos
+              </button>
+            </div>
+            {modeTab === 'variable' ? (
+              <button
+                onClick={() => {
+                  const today = new Date()
+                  const yyyy = today.getFullYear()
+                  const mm = String(today.getMonth() + 1).padStart(2, '0')
+                  const dd = String(today.getDate()).padStart(2, '0')
+                  const todayStr = `${yyyy}-${mm}-${dd}`
+                  setSelectedVar({
+                    amount: '',
+                    date: todayStr,
+                    description: '',
+                    category_id: null,
+                    subcategory_id: null,
+                    new_category: '',
+                    new_subcategory: ''
+                  } as ExpenseForm)
+                  setShowVarModal(true)
+                }}
+                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-sm transition"
+              >
+                + Agregar
+              </button>
+            ) : (
+              <button
+                onClick={handleAddNewMonth}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-sm transition"
+              >
+                Nuevo mes
+              </button>
+            )}
           </div>
-          <button
-            onClick={triggerEmailSync}
-            disabled={syncingEmails}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-sm transition disabled:opacity-50"
-            title="Leer últimos correos y promover a gastos"
-          >
-            {syncingEmails ? 'Leyendo…' : 'Leer mails'}
-          </button>
-          {modeTab === 'variable' && (
-            <button
-              onClick={() => {
-                const today = new Date()
-                const yyyy = today.getFullYear()
-                const mm = String(today.getMonth() + 1).padStart(2, '0')
-                const dd = String(today.getDate()).padStart(2, '0')
-                const todayStr = `${yyyy}-${mm}-${dd}`
-                setSelectedVar({
-                  amount: '',
-                  date: todayStr,
-                  description: '',
-                  category_id: null,
-                  subcategory_id: null,
-                  new_category: '',
-                  new_subcategory: ''
-                } as ExpenseForm)
-                setShowVarModal(true)
-              }}
-              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-full shadow-sm transition"
-            >
-              + Agregar Gasto
-            </button>
-          )}
-          {modeTab === 'fixed' && (
-            <button
-              onClick={handleAddNewMonth}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-sm transition"
-            >
-              Nuevo mes
-            </button>
-          )}
+        </div>
+        <div className="mt-3">
+          <input
+            type="text"
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+            placeholder="Filtrar por fecha, categoría, subcategoría o descripción…"
+            className="w-full px-3 py-2.5 border rounded-xl shadow-sm focus:outline-none focus:ring"
+          />
         </div>
       </div>
 
-      {syncMsg && <p className="text-sm text-gray-700 mb-2">{syncMsg}</p>}
-
-      <div className="mb-4">
-        <input
-          type="text"
-          value={filterText}
-          onChange={e => setFilterText(e.target.value)}
-          placeholder="Filtrar por fecha, categoría, subcategoría o descripción…"
-          className="w-full px-3 py-2 border rounded shadow-sm focus:outline-none focus:ring"
-        />
-      </div>
 
       {error && <p className="text-red-600 mb-4">{error}</p>}
 
       <div className="space-y-6">
         {allGroups.map(group => (
           <section key={group.key}>
-            <header className="flex items-center justify-between mb-2">
+            <header className="flex items-center justify-between mb-2 text-sm">
               <h2 className="text-lg font-semibold">{group.label}</h2>
               <div className="flex items-center gap-3 text-sm">
                 <span className="text-gray-500 hidden sm:inline">
@@ -450,7 +414,7 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                     return (
                       <li
                         key={`${group.key}-${row.category}`}
-                        className="grid grid-cols-[1fr_auto_auto] gap-2 items-center p-3 bg-white rounded shadow-sm"
+                        className="grid grid-cols-[1fr_auto_auto] gap-2 items-center p-3 bg-white rounded-xl shadow-sm ring-1 ring-black/5"
                       >
                         {/* Left: Category */}
                         <span className="truncate">{row.category}</span>
@@ -468,7 +432,7 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                               placeholder="Monto"
                               value={val}
                               onChange={e => setPayInputs(prev => ({ ...prev, [inputKey]: e.target.value }))}
-                              className="w-28 px-2 py-1 border rounded text-right"
+                              className="w-28 px-2 py-1.5 border rounded-lg text-right"
                             />
                           )}
                         </span>
@@ -539,26 +503,29 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                       } as ExpenseForm)
                       setShowVarModal(true)
                     }}
-                    className="cursor-pointer flex justify-between p-3 bg-white rounded shadow-sm hover:bg-gray-50 transition"
+                    className="cursor-pointer p-3 bg-white rounded-xl shadow-sm ring-1 ring-black/5 hover:bg-gray-50 transition"
                   >
-                    {/* Descripción */}
-                    <span className="flex-[2] truncate">{tx.description || '-'}</span>
-                    {/* Categoría (sin badge) */}
-                    <span className="flex-1 truncate">{tx.category.name}</span>
-                    {/* Subcategoría */}
-                    <span className="flex-1 truncate">{tx.subcategory?.name || '-'}</span>
-                    {/* Tipo de pago */}
-                    <span className="w-24 text-center">
-                      {tx.payment_type === 'credito' ? (
-                        <span className="px-2 py-0.5 rounded-full bg-blue-600 text-white text-xs">Crédito</span>
-                      ) : tx.payment_type === 'debito' ? (
-                        <span className="px-2 py-0.5 rounded-full bg-green-600 text-white text-xs">Débito</span>
-                      ) : (
-                        '-'
-                      )}
-                    </span>
-                    {/* Monto */}
-                    <span className="w-24 text-right">${money(tx.amount)}</span>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-medium text-gray-900 truncate">
+                          {tx.description || '-'}
+                        </p>
+                        <div className="mt-0.5 text-xs text-gray-500 flex items-center gap-2 min-w-0">
+                          <span className="truncate">
+                            {tx.category.name}
+                            {tx.subcategory?.name ? ` • ${tx.subcategory.name}` : ''}
+                          </span>
+                          {tx.payment_type === 'credito' ? (
+                            <span className="px-1.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px]">Crédito</span>
+                          ) : tx.payment_type === 'debito' ? (
+                            <span className="px-1.5 py-0.5 rounded-full bg-green-600 text-white text-[10px]">Débito</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[13px] font-semibold tabular-nums">${money(tx.amount)}</div>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>

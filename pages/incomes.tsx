@@ -32,6 +32,7 @@ const Incomes: NextPage = () => {
   const [showModal, setShowModal] = useState(false)
   const [selected, setSelected] = useState<Income | null>(null)
   const [loading, setLoading] = useState(true)
+  const [filterText, setFilterText] = useState('')
 
   const loadIncomes = async () => {
     setError(null)
@@ -98,7 +99,11 @@ const Incomes: NextPage = () => {
 
   const grouped = React.useMemo(() => {
     const groups: Record<string, { label: string; items: Income[]; total: number }> = {}
-    inc.forEach(item => {
+    const source = inc.filter(i => {
+      const t = filterText.toLowerCase()
+      return [i.date, i.category.name, i.description ?? ''].join(' ').toLowerCase().includes(t)
+    })
+    source.forEach(item => {
       const { year, month } = parseYearMonth(item.date)
       const monthKey = `${year}-${month.toString().padStart(2, '0')}`
       const monthLabel = `${MONTHS_ES_SHORT[month - 1]} ${year}`
@@ -108,22 +113,34 @@ const Incomes: NextPage = () => {
       groups[monthKey].items.push(item)
       groups[monthKey].total += item.amount
     })
-    // Convert to array sorted descending by monthKey
     return Object.entries(groups)
       .sort((a, b) => (a[0] > b[0] ? -1 : 1))
-      .map(([key, val]) => val)
-  }, [inc])
+      .map(([_, val]) => val)
+  }, [inc, filterText])
 
   return (
     <main className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Ingresos</h1>
-        <button
-          onClick={() => { setSelected(null); setShowModal(true) }}
-          className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-full shadow-sm transition"
-        >
-          + Agregar Ingreso
-        </button>
+      <div className="sticky top-0 z-20 -mx-4 px-4 pt-2 pb-3 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold">Ingresos</h1>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setSelected(null); setShowModal(true) }}
+              className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-full shadow-sm transition"
+            >
+              + Agregar
+            </button>
+          </div>
+        </div>
+        <div className="mt-3">
+          <input
+            type="text"
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+            placeholder="Filtrar por fecha, categoría o descripción…"
+            className="w-full px-3 py-2.5 border rounded-xl shadow-sm focus:outline-none focus:ring"
+          />
+        </div>
       </div>
 
       {loading && (
@@ -146,24 +163,24 @@ const Incomes: NextPage = () => {
 
       {!loading && !error && grouped.map(group => (
         <section key={group.label} className="mb-6">
-          <h2 className="text-lg font-semibold mb-2 flex items-center justify-between border-b border-gray-200 pb-1">
+          <h2 className="text-lg font-semibold mb-2 flex items-center justify-between border-b border-gray-200 pb-1 text-sm">
             <span>{group.label}</span>
             <span className="text-sm text-gray-600">{group.items.length} {group.items.length === 1 ? 'movimiento' : 'movimientos'}
               <span className="ml-3 font-semibold text-gray-800">Total: ${money(group.total)}</span>
             </span>
           </h2>
-          <ul className="bg-white rounded shadow-sm divide-y divide-gray-200">
+          <ul className="space-y-2">
             {group.items.map(i => (
               <li
                 key={i.id}
-                className="grid grid-cols-[1fr_auto_auto] gap-2 items-center p-3"
+                className="grid grid-cols-[1fr_auto_auto] gap-2 items-center p-3 bg-white rounded-xl shadow-sm ring-1 ring-black/5"
               >
                 {/* Izquierda: Categoría (y tooltip con descripción si existe) */}
                 <span className="truncate" title={i.description || ''}>{i.category.name}</span>
 
                 {/* Centro: Monto alineado a la derecha */}
                 <span className="flex justify-end">
-                  <span className="inline-block w-32 text-right font-semibold">${money(i.amount)}</span>
+                  <span className="inline-block w-32 text-right font-semibold tabular-nums">${money(i.amount)}</span>
                 </span>
 
                 {/* Derecha: Acción Editar que abre el modal */}

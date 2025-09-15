@@ -5,12 +5,13 @@ import React, { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import ExpenseModal from '../src/components/ExpenseModal'
 import IncomeModal from '../src/components/IncomeModal'
-import EmailIngestButton from '@/components/EmailIngestButton'
+// import EmailIngestButton from '@/components/EmailIngestButton' // removed, using icon-only button
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ArrowDownIcon,
   ArrowUpIcon,
+  ArrowPathIcon,
   CurrencyDollarIcon,
   PlusIcon,
   MinusIcon
@@ -79,6 +80,9 @@ const Dashboard: NextPage = () => {
   const [showIncomeModal, setShowIncomeModal] = useState(false)
   const [prevBalances, setPrevBalances] = useState<{ ym: string; balance: number }[]>([])
   const [ytdBalance, setYtdBalance] = useState(0)
+
+  // Email sync UI state
+  const [syncingEmails, setSyncingEmails] = useState(false)
 
   const [uncategorized, setUncategorized] = useState<Array<{
     id: number;
@@ -343,6 +347,61 @@ const Dashboard: NextPage = () => {
     fetchData()
   }, [selectedMonth, sessionChecked])
 
+  const reloadUncategorized = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    const uid = session.user.id
+    const [y, m] = selectedMonth.split('-').map(Number)
+    const start = `${y}-${String(m).padStart(2, '0')}-01`
+    const lastDay = new Date(y, m, 0).getDate()
+    const end = `${y}-${String(m).padStart(2, '0')}-${lastDay}`
+    const { data: unc } = await supabase
+      .from('transactions')
+      .select('id,date,description,amount,currency,category_id,subcategory_id')
+      .eq('user_id', uid)
+      .gte('date', start)
+      .lte('date', end)
+      .is('category_id', null)
+      .order('date', { ascending: false })
+    setUncategorized((unc || []) as any)
+    const sel: Record<number, { category_id: string | null; subcategory_id: string | null }> = {}
+    ;(unc || []).forEach((t: any) => { sel[t.id] = { category_id: t.category_id ?? null, subcategory_id: t.subcategory_id ?? null } })
+    setSelection(sel)
+  }
+
+  const handleEmailRefresh = async () => {
+    try {
+      setSyncingEmails(true)
+      const secret = process.env.NEXT_PUBLIC_EMAIL_INGEST_SECRET || ''
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) { console.warn('[EmailSync] No session user'); return }
+
+      // 1) Sync
+      const syncRes = await fetch('/api/email/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-email-secret': secret },
+        body: JSON.stringify({ user_id: uid, limit: 200, days: 30 })
+      })
+      if (!syncRes.ok) throw new Error(`sync failed: ${syncRes.status}`)
+
+      // 2) Promote
+      const promoteRes = await fetch('/api/email/promote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-email-secret': secret },
+        body: JSON.stringify({ user_id: uid, limit: 60 })
+      })
+      if (!promoteRes.ok) throw new Error(`promote failed: ${promoteRes.status}`)
+
+      // Refresh only uncategorized list so the user sees new items
+      await reloadUncategorized()
+    } catch (e) {
+      console.error('[EmailSync] error', e)
+    } finally {
+      setSyncingEmails(false)
+    }
+  }
+
   // --- Helper functions for categorization ---
   const getMonthRange = (ym: string) => {
     const [y, m] = ym.split('-').map(Number)
@@ -508,111 +567,69 @@ const Dashboard: NextPage = () => {
 
         {/* Cards */}
         <main className="mx-auto max-w-screen-xl p-4 pb-24 grid gap-4 grid-cols-1 lg:grid-cols-3">
-          {/* Column 1: Balance + Ingresos */}
-          <div className="space-y-4 lg:col-span-1">
-            {/* Balance */}
-            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
-              <header className="flex items-center mb-4">
-                <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
-                <h3 className="text-lg font-semibold">Balance</h3>
-              </header>
-              <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
-                <Amount value={balance} />
-              </p>
-              <div className="mt-4 border-t pt-3 text-sm">
-                <ul className="space-y-1">
-                  {prevBalances.map(({ ym, balance }) => (
-                    <li key={ym} className="flex justify-between">
-                      <span className="text-gray-500">{shortMonthLabel(ym)}</span>
-                      <Amount value={Math.abs(balance)} negative={balance < 0} />
-                    </li>
-                  ))}
-                  <li className="flex justify-between pt-1 border-t mt-2">
-                    <span className="font-medium">Acumulado {selectedMonth.split('-')[0]}</span>
-                    <Amount value={Math.abs(ytdBalance)} negative={ytdBalance < 0} />
-                  </li>
-                </ul>
-              </div>
-            </section>
-            {/* Ingresos */}
-            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
-              <header className="flex items-center mb-4">
-                <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
-                <h3 className="text-lg font-semibold">Ingresos</h3>
-              </header>
-              <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
-              <ul className="divide-y space-y-1">
-                {incomesByCategory.map(cat => (
-                  <li key={cat.name} className="py-1 flex justify-between text-sm">
-                    <span>{cat.name}</span>
-                    <Amount className="text-right" value={cat.total} />
-                  </li>
-                ))}
-                {devolucionesTotal>0 && (
-                  <li className="py-1 flex justify-between text-sm text-red-600">
-                    <span>Devoluciones</span>
-                    <Amount className="text-right" value={devolucionesTotal} negative />
-                  </li>
-                )}
-              </ul>
-            </section>
-          </div>
-          {/* Column 2: Gastos Fijos + Gastos Variables */}
-          <div className="space-y-4 lg:col-span-1">
-            {/* Gastos Fijos */}
-            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
-              <header className="flex items-center mb-4">
-                <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
-                <h3 className="text-lg font-semibold">Gastos Fijos</h3>
-              </header>
-              <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
-              <ul className="divide-y space-y-1">
-                {fixedExpensesByCategory.map(cat => (
-                  <li key={cat.name} className="py-1 flex justify-between text-sm">
-                    <span>{cat.name}</span>
-                    <Amount className="text-right" value={cat.total} />
+          {/* Top row: Ingresos (col1), Balance (col2), Por categorizar (col3) */}
+          {/* Ingresos */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
+            <header className="flex items-center mb-4">
+              <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
+              <h3 className="text-lg font-semibold">Ingresos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
+            <ul className="divide-y space-y-1">
+              {incomesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
+                  <span>{cat.name}</span>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+              {devolucionesTotal>0 && (
+                <li className="py-1 flex justify-between text-sm text-red-600">
+                  <span>Devoluciones</span>
+                  <Amount className="text-right" value={devolucionesTotal} negative />
+                </li>
+              )}
+            </ul>
+          </section>
+
+          {/* Balance */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
+            <header className="flex items-center mb-4">
+              <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
+              <h3 className="text-lg font-semibold">Balance</h3>
+            </header>
+            <p className={`text-4xl font-bold ${balance<0?'text-red-600':'text-green-600'}`}>
+              <Amount value={balance} />
+            </p>
+            <div className="mt-4 border-t pt-3 text-sm">
+              <ul className="space-y-1">
+                {prevBalances.map(({ ym, balance }) => (
+                  <li key={ym} className="flex justify-between">
+                    <span className="text-gray-500">{shortMonthLabel(ym)}</span>
+                    <Amount value={Math.abs(balance)} negative={balance < 0} />
                   </li>
                 ))}
+                <li className="flex justify-between pt-1 border-t mt-2">
+                  <span className="font-medium">Acumulado {selectedMonth.split('-')[0]}</span>
+                  <Amount value={Math.abs(ytdBalance)} negative={ytdBalance < 0} />
+                </li>
               </ul>
-            </section>
-            {/* Gastos Variables */}
-            <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col">
-              <header className="flex items-center mb-4">
-                <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
-                <h3 className="text-lg font-semibold">Gastos Variables</h3>
-              </header>
-              <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
-              <ul className="divide-y space-y-1">
-                {variableExpensesByCategory.map(cat => (
-                  <li key={cat.name}>
-                    <button
-                      onClick={() => toggleCategory(cat.name)}
-                      className="w-full flex justify-between text-sm py-1"
-                    >
-                      <span>{cat.name}</span>
-                      <Amount className="text-right" value={cat.total} />
-                    </button>
-                    {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
-                      <ul className="pl-4 space-y-1">
-                        {variableSubcategoriesByCategory[cat.name].map(sub => (
-                          <li key={sub.name} className="flex justify-between text-xs py-1">
-                            <span className="italic">{sub.name}</span>
-                            <Amount className="text-right" value={sub.total} />
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          </div>
-          {/* Column 3: Gastos sin categoría */}
+            </div>
+          </section>
+
+          {/* Por categorizar (antes: Gastos sin categoría) */}
           <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
             <header className="sticky top-0 z-10 bg-white pb-2 mb-2 flex items-center justify-between border-b">
-              <h3 className="text-lg font-semibold">Gastos sin categoría (mes)</h3>
+              <h3 className="text-lg font-semibold">Por categorizar</h3>
               <div className="shrink-0">
-                <EmailIngestButton />
+                <button
+                  onClick={handleEmailRefresh}
+                  disabled={syncingEmails}
+                  aria-label="Actualizar desde emails"
+                  className="inline-flex items-center justify-center size-9 rounded-full bg-gray-900 text-white shadow-sm ring-1 ring-black/5 hover:bg-gray-800 active:translate-y-px disabled:opacity-50"
+                  title="Actualizar desde emails"
+                >
+                  <ArrowPathIcon className={`h-5 w-5 ${syncingEmails ? 'animate-spin' : ''}`} />
+                </button>
               </div>
             </header>
 
@@ -794,6 +811,56 @@ const Dashboard: NextPage = () => {
                 </div>
               </>
             )}
+          </section>
+
+          {/* Bottom row: Gastos Fijos (col1), Gastos Variables (col2) */}
+          {/* Gastos Fijos */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Fijos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {fixedExpensesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
+                  <span>{cat.name}</span>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {/* Gastos Variables */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Variables</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {variableExpensesByCategory.map(cat => (
+                <li key={cat.name}>
+                  <button
+                    onClick={() => toggleCategory(cat.name)}
+                    className="w-full flex justify-between text-sm py-1"
+                  >
+                    <span>{cat.name}</span>
+                    <Amount className="text-right" value={cat.total} />
+                  </button>
+                  {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
+                    <ul className="pl-4 space-y-1">
+                      {variableSubcategoriesByCategory[cat.name].map(sub => (
+                        <li key={sub.name} className="flex justify-between text-xs py-1">
+                          <span className="italic">{sub.name}</span>
+                          <Amount className="text-right" value={sub.total} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
           </section>
         </main>
         <div className="py-3 text-center">
