@@ -173,27 +173,31 @@ const Incomes: NextPage = () => {
             {group.items.map(i => (
               <li
                 key={i.id}
-                className="grid grid-cols-[1fr_auto_auto] gap-2 items-center p-3 bg-white rounded-xl shadow-sm ring-1 ring-black/5"
+                onClick={() => {
+                  setSelected(i)
+                  setShowModal(true)
+                }}
+                className="cursor-pointer p-3 bg-white rounded-xl shadow-sm ring-1 ring-black/5 hover:bg-gray-50 transition"
               >
-                {/* Izquierda: Categoría (y tooltip con descripción si existe) */}
-                <span className="truncate" title={i.description || ''}>{i.category.name}</span>
-
-                {/* Centro: Monto alineado a la derecha */}
-                <span className="flex justify-end">
-                  <span className="inline-block w-32 text-right font-semibold tabular-nums">${money(i.amount)}</span>
-                </span>
-
-                {/* Derecha: Acción Editar que abre el modal */}
-                <div className="flex justify-end">
-                  <button
-                    onClick={() => {
-                      setSelected(i)
-                      setShowModal(true)
-                    }}
-                    className="px-3 py-1 rounded text-sm bg-gray-200 text-gray-700 hover:bg-gray-300"
-                  >
-                    Editar
-                  </button>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-gray-900 truncate">
+                      {i.category.name || '-'}
+                    </p>
+                    <div className="mt-0.5 text-xs text-gray-500 flex items-center gap-2 min-w-0">
+                      {i.description ? (
+                        <span className="truncate">{i.description}</span>
+                      ) : (
+                        <span className="truncate text-gray-400">—</span>
+                      )}
+                      {i.category.name && i.category.name.toLowerCase() === 'devolución' && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-green-600 text-white text-[10px]">Devolución</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[13px] font-semibold tabular-nums">${money(i.amount)}</div>
+                  </div>
                 </div>
               </li>
             ))}
