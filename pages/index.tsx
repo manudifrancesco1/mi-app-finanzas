@@ -567,32 +567,8 @@ const Dashboard: NextPage = () => {
 
         {/* Cards */}
         <main className="mx-auto max-w-screen-xl p-4 pb-24 grid gap-4 grid-cols-1 lg:grid-cols-3">
-          {/* Top row: Ingresos (col1), Balance (col2), Por categorizar (col3) */}
-          {/* Ingresos */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
-            <header className="flex items-center mb-4">
-              <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
-              <h3 className="text-lg font-semibold">Ingresos</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
-            <ul className="divide-y space-y-1">
-              {incomesByCategory.map(cat => (
-                <li key={cat.name} className="py-1 flex justify-between text-sm">
-                  <span>{cat.name}</span>
-                  <Amount className="text-right" value={cat.total} />
-                </li>
-              ))}
-              {devolucionesTotal>0 && (
-                <li className="py-1 flex justify-between text-sm text-red-600">
-                  <span>Devoluciones</span>
-                  <Amount className="text-right" value={devolucionesTotal} negative />
-                </li>
-              )}
-            </ul>
-          </section>
-
-          {/* Balance */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
+          {/* 1. Balance section - first */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-1">
             <header className="flex items-center mb-4">
               <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
               <h3 className="text-lg font-semibold">Balance</h3>
@@ -615,9 +591,77 @@ const Dashboard: NextPage = () => {
               </ul>
             </div>
           </section>
-
-          {/* Por categorizar (antes: Gastos sin categoría) */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
+          {/* 2. Ingresos section - second */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-1">
+            <header className="flex items-center mb-4">
+              <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
+              <h3 className="text-lg font-semibold">Ingresos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalIncomes} /></p>
+            <ul className="divide-y space-y-1">
+              {incomesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
+                  <span>{cat.name}</span>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+              {devolucionesTotal>0 && (
+                <li className="py-1 flex justify-between text-sm text-red-600">
+                  <span>Devoluciones</span>
+                  <Amount className="text-right" value={devolucionesTotal} negative />
+                </li>
+              )}
+            </ul>
+          </section>
+          {/* 3. Gastos Fijos section - third */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-2">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Fijos</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {fixedExpensesByCategory.map(cat => (
+                <li key={cat.name} className="py-1 flex justify-between text-sm">
+                  <span>{cat.name}</span>
+                  <Amount className="text-right" value={cat.total} />
+                </li>
+              ))}
+            </ul>
+          </section>
+          {/* 4. Gastos Variables section - fourth */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-2">
+            <header className="flex items-center mb-4">
+              <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
+              <h3 className="text-lg font-semibold">Gastos Variables</h3>
+            </header>
+            <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
+            <ul className="divide-y space-y-1">
+              {variableExpensesByCategory.map(cat => (
+                <li key={cat.name}>
+                  <button
+                    onClick={() => toggleCategory(cat.name)}
+                    className="w-full flex justify-between text-sm py-1"
+                  >
+                    <span>{cat.name}</span>
+                    <Amount className="text-right" value={cat.total} />
+                  </button>
+                  {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
+                    <ul className="pl-4 space-y-1">
+                      {variableSubcategoriesByCategory[cat.name].map(sub => (
+                        <li key={sub.name} className="flex justify-between text-xs py-1">
+                          <span className="italic">{sub.name}</span>
+                          <Amount className="text-right" value={sub.total} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+          {/* 5. Por categorizar section - last */}
+          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
             <header className="sticky top-0 z-10 bg-white pb-2 mb-2 flex items-center justify-between border-b">
               <h3 className="text-lg font-semibold">Por categorizar</h3>
               <div className="shrink-0">
@@ -811,56 +855,6 @@ const Dashboard: NextPage = () => {
                 </div>
               </>
             )}
-          </section>
-
-          {/* Bottom row: Gastos Fijos (col1), Gastos Variables (col2) */}
-          {/* Gastos Fijos */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
-            <header className="flex items-center mb-4">
-              <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
-              <h3 className="text-lg font-semibold">Gastos Fijos</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalFixedExpenses} /></p>
-            <ul className="divide-y space-y-1">
-              {fixedExpensesByCategory.map(cat => (
-                <li key={cat.name} className="py-1 flex justify-between text-sm">
-                  <span>{cat.name}</span>
-                  <Amount className="text-right" value={cat.total} />
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          {/* Gastos Variables */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1">
-            <header className="flex items-center mb-4">
-              <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
-              <h3 className="text-lg font-semibold">Gastos Variables</h3>
-            </header>
-            <p className="text-3xl font-bold mb-4"><Amount value={totalVariableExpenses} /></p>
-            <ul className="divide-y space-y-1">
-              {variableExpensesByCategory.map(cat => (
-                <li key={cat.name}>
-                  <button
-                    onClick={() => toggleCategory(cat.name)}
-                    className="w-full flex justify-between text-sm py-1"
-                  >
-                    <span>{cat.name}</span>
-                    <Amount className="text-right" value={cat.total} />
-                  </button>
-                  {expandedCategories[cat.name] && variableSubcategoriesByCategory[cat.name] && (
-                    <ul className="pl-4 space-y-1">
-                      {variableSubcategoriesByCategory[cat.name].map(sub => (
-                        <li key={sub.name} className="flex justify-between text-xs py-1">
-                          <span className="italic">{sub.name}</span>
-                          <Amount className="text-right" value={sub.total} />
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
           </section>
         </main>
         <div className="py-3 text-center">
