@@ -419,33 +419,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         }
 
         // Upsert deduping by (user_id, hash) — index: email_tx_user_hash_key
+        // (ignoreDuplicates=true ensures we never reset processed=true back to false on re-runs)
         const { data: upData, error: upErr }: { data: any[] | null; error: any } = await admin
           .from('email_transactions')
-          .upsert([{
-            user_id,
-            provider,
-            imap_mailbox,
-            imap_uid,
-            message_id: messageId,
+          .upsert([
+            {
+              user_id,
+              provider,
+              imap_mailbox,
+              imap_uid,
+              message_id: messageId,
 
-            subject,
-            email_datetime,
-            date_local,
+              subject,
+              email_datetime,
+              date_local,
 
-            source: 'imap',
+              source: 'imap',
 
-            from_name: fromName || null,
-            from_address: fromAddr || null,
+              from_name: fromName || null,
+              from_address: fromAddr || null,
 
-            merchant: parsedMerchant,
-            amount: parsedAmount,
-            currency: effectiveCurrency.toUpperCase(),
-            card_last4: parsedLast4,
-            processed: false,
+              merchant: parsedMerchant,
+              amount: parsedAmount,
+              currency: effectiveCurrency.toUpperCase(),
+              card_last4: parsedLast4,
+              // IMPORTANT: we do NOT set `processed` here to avoid flipping a row back to false on conflict
 
-            gmail_msgid: gmail_msgid,
-            hash,
-          }], { onConflict: 'user_id,hash', ignoreDuplicates: false })
+              gmail_msgid: gmail_msgid,
+              hash,
+            }
+          ], { onConflict: 'user_id,hash', ignoreDuplicates: true })
           .select()
 
         out.attempted++
