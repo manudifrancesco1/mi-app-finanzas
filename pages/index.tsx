@@ -424,6 +424,7 @@ const Dashboard: NextPage = () => {
   // --- Helpers for creating categories and subcategories ---
   const NEW_CATEGORY_VALUE = '__new_cat__'
   const NEW_SUBCATEGORY_VALUE = '__new_sub__'
+  const QUICK_CAT_NAMES = ['Alimentación', 'Comidas afuera', 'Salud', 'Varios']
 
   const createCategory = async (): Promise<{ id: string; name: string } | null> => {
     const name = window.prompt('Nueva categoría')?.trim()
@@ -496,6 +497,8 @@ const Dashboard: NextPage = () => {
   const totalExpenses = totalFixedExpenses + netVar
   const balance = totalIncomes - totalExpenses
 
+  const quickCats = categories.filter(c => QUICK_CAT_NAMES.includes(c.name))
+
   return (
     <>
       <nav className="fixed top-0 left-0 right-0 z-50 shadow-md bg-white">
@@ -535,20 +538,45 @@ const Dashboard: NextPage = () => {
       <div className="pt-16">
         {/* Modales */}
         {showExpenseModal && (
-          <ExpenseModal
-            onClose={() => setShowExpenseModal(false)}
-            onSaved={() => { setShowExpenseModal(false); /* recarga data si quieres */ }}
-          />
+          <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-3 sm:p-6">
+            <div
+              className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+              onClick={() => setShowExpenseModal(false)}
+            />
+            <div className="relative w-full max-w-md sm:max-w-lg bg-white rounded-2xl shadow-xl ring-1 ring-black/10 overflow-hidden">
+              <ExpenseModal
+                onClose={() => setShowExpenseModal(false)}
+                onSaved={() => { setShowExpenseModal(false); /* recarga data si quieres */ }}
+              />
+            </div>
+          </div>
         )}
         {showIncomeModal && (
-          <IncomeModal
-            onClose={() => setShowIncomeModal(false)}
-            onSaved={() => { setShowIncomeModal(false); /* recarga data si quieres */}}
-          />
+          <div className="fixed inset-0 z-[60] flex items-start sm:items-center justify-center p-3 sm:p-6">
+            <div
+              className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+              onClick={() => setShowIncomeModal(false)}
+            />
+            <div className="relative w-full max-w-md sm:max-w-lg bg-white rounded-2xl shadow-xl ring-1 ring-black/10 overflow-hidden">
+              <IncomeModal
+                onClose={() => setShowIncomeModal(false)}
+                onSaved={() => { setShowIncomeModal(false); /* recarga data si quieres */}}
+              />
+            </div>
+          </div>
         )}
 
         {/* Floating action buttons */}
         <div className="fixed right-4 bottom-24 sm:bottom-28 z-40 flex flex-col gap-3">
+          <button
+            onClick={handleEmailRefresh}
+            disabled={syncingEmails}
+            aria-label="Actualizar desde emails"
+            className="w-14 h-14 rounded-full bg-gray-900 text-white shadow-xl ring-1 ring-black/5 hover:bg-gray-800 active:scale-95 transition flex items-center justify-center disabled:opacity-50"
+            title="Actualizar desde emails"
+          >
+            <ArrowPathIcon className={`w-7 h-7 ${syncingEmails ? 'animate-spin' : ''}`} />
+          </button>
           <button
             onClick={() => setShowIncomeModal(true)}
             aria-label="Nuevo ingreso"
@@ -568,7 +596,7 @@ const Dashboard: NextPage = () => {
         {/* Cards */}
         <main className="mx-auto max-w-screen-xl p-4 pb-24 grid gap-4 grid-cols-1 lg:grid-cols-3">
           {/* 1. Balance section - first */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-1">
+          <section className="order-2 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-1">
             <header className="flex items-center mb-4">
               <CurrencyDollarIcon className="h-6 w-6 text-blue-500 mr-2" />
               <h3 className="text-lg font-semibold">Balance</h3>
@@ -592,7 +620,7 @@ const Dashboard: NextPage = () => {
             </div>
           </section>
           {/* 2. Ingresos section - second */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-1">
+          <section className="order-3 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-1">
             <header className="flex items-center mb-4">
               <ArrowUpIcon className="h-6 w-6 text-green-500 mr-2" />
               <h3 className="text-lg font-semibold">Ingresos</h3>
@@ -614,7 +642,7 @@ const Dashboard: NextPage = () => {
             </ul>
           </section>
           {/* 3. Gastos Fijos section - third */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-2">
+          <section className="order-4 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-1 lg:row-start-2">
             <header className="flex items-center mb-4">
               <ArrowDownIcon className="h-6 w-6 text-red-500 mr-2" />
               <h3 className="text-lg font-semibold">Gastos Fijos</h3>
@@ -630,7 +658,7 @@ const Dashboard: NextPage = () => {
             </ul>
           </section>
           {/* 4. Gastos Variables section - fourth */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-2">
+          <section className="order-5 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-6 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-start-2">
             <header className="flex items-center mb-4">
               <ArrowDownIcon className="h-6 w-6 text-orange-500 mr-2" />
               <h3 className="text-lg font-semibold">Gastos Variables</h3>
@@ -661,7 +689,7 @@ const Dashboard: NextPage = () => {
             </ul>
           </section>
           {/* 5. Por categorizar section - last */}
-          <section className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
+          <section className="order-1 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
             <header className="sticky top-0 z-10 bg-white pb-2 mb-2 flex items-center justify-between border-b">
               <h3 className="text-lg font-semibold">Por categorizar</h3>
               <div className="shrink-0">
@@ -669,7 +697,7 @@ const Dashboard: NextPage = () => {
                   onClick={handleEmailRefresh}
                   disabled={syncingEmails}
                   aria-label="Actualizar desde emails"
-                  className="inline-flex items-center justify-center size-9 rounded-full bg-gray-900 text-white shadow-sm ring-1 ring-black/5 hover:bg-gray-800 active:translate-y-px disabled:opacity-50"
+                  className="hidden sm:inline-flex items-center justify-center size-9 rounded-full bg-gray-900 text-white shadow-sm ring-1 ring-black/5 hover:bg-gray-800 active:translate-y-px disabled:opacity-50"
                   title="Actualizar desde emails"
                 >
                   <ArrowPathIcon className={`h-5 w-5 ${syncingEmails ? 'animate-spin' : ''}`} />
@@ -685,7 +713,6 @@ const Dashboard: NextPage = () => {
                 <ul className="sm:hidden space-y-3">
                   {uncategorized.map((tx) => {
                     const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
-                    const subsForCat = sel.category_id ? subcategories.filter((s) => s.category_id === sel.category_id) : []
                     return (
                       <li key={tx.id} className="bg-white rounded-xl shadow ring-1 ring-black/5 p-3">
                         <div className="flex items-start justify-between gap-3">
@@ -695,6 +722,27 @@ const Dashboard: NextPage = () => {
                           </div>
                           <p className="text-right font-semibold tabular-nums">${formatARS(tx.amount)}</p>
                         </div>
+
+                        {quickCats.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {quickCats.map((c) => (
+                              <button
+                                key={c.id}
+                                onClick={() => {
+                                  updateSelection(tx.id, 'category_id', c.id)
+                                  updateSelection(tx.id, 'subcategory_id', null)
+                                }}
+                                className={`px-3 py-1.5 rounded-full text-sm transition ${
+                                  sel.category_id === c.id
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                                }`}
+                              >
+                                {c.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
 
                         <div className="mt-3 grid grid-cols-1 gap-2">
                           <label className="block text-xs text-gray-500">Categoría</label>
@@ -724,32 +772,6 @@ const Dashboard: NextPage = () => {
                             <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
                           </select>
 
-                          <label className="block text-xs text-gray-500 mt-2">Subcategoría <span className="text-gray-400">(opcional)</span></label>
-                          <select
-                            className="w-full border rounded-lg px-3 py-2 text-base min-h-[44px] bg-white disabled:bg-gray-100"
-                            value={sel.subcategory_id || ''}
-                            onChange={async (e) => {
-                              const val = e.target.value || null
-                              if (val === NEW_SUBCATEGORY_VALUE && sel.category_id) {
-                                const created = await createSubcategory(sel.category_id)
-                                if (created) {
-                                  updateSelection(tx.id, 'subcategory_id', created.id)
-                                }
-                                return
-                              }
-                              updateSelection(tx.id, 'subcategory_id', val)
-                            }}
-                            disabled={!sel.category_id}
-                          >
-                            <option value="">—</option>
-                            {subsForCat.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                            {sel.category_id && <option value={NEW_SUBCATEGORY_VALUE}>+ Nueva subcategoría…</option>}
-                          </select>
-
                           <button
                             onClick={() => saveCategorization(tx.id)}
                             disabled={!!savingIds[tx.id] || !selection[tx.id]?.category_id}
@@ -772,71 +794,65 @@ const Dashboard: NextPage = () => {
                         <th className="px-2 py-2">Descripción</th>
                         <th className="px-2 py-2 text-right">Monto</th>
                         <th className="px-2 py-2">Categoría</th>
-                        <th className="px-2 py-2">Subcategoría</th>
                         <th className="px-2 py-2"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {uncategorized.map((tx) => {
                         const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
-                        const subsForCat = sel.category_id ? subcategories.filter((s) => s.category_id === sel.category_id) : []
                         return (
                           <tr key={tx.id}>
                             <td className="px-2 py-2 whitespace-nowrap">{humanDate(tx.date)}</td>
                             <td className="px-2 py-2">{tx.description || '—'}</td>
                             <td className="px-2 py-2 text-right tabular-nums">${formatARS(tx.amount)}</td>
                             <td className="px-2 py-2">
-                              <select
-                                className="border rounded-md px-2 py-1 text-sm"
-                                value={sel.category_id || ''}
-                                onChange={async (e) => {
-                                  const val = e.target.value || null
-                                  if (val === NEW_CATEGORY_VALUE) {
-                                    const created = await createCategory()
-                                    if (created) {
-                                      updateSelection(tx.id, 'category_id', created.id)
-                                      updateSelection(tx.id, 'subcategory_id', null)
+                              <div className="space-y-2">
+                                {quickCats.length > 0 && (
+                                  <div className="flex flex-wrap gap-2">
+                                    {quickCats.map((c) => (
+                                      <button
+                                        key={c.id}
+                                        onClick={() => {
+                                          updateSelection(tx.id, 'category_id', c.id)
+                                          updateSelection(tx.id, 'subcategory_id', null)
+                                        }}
+                                        className={`px-2.5 py-1 rounded-full text-xs transition ${
+                                          sel.category_id === c.id
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                                        }`}
+                                      >
+                                        {c.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                <select
+                                  className="border rounded-md px-2 py-1 text-sm"
+                                  value={sel.category_id || ''}
+                                  onChange={async (e) => {
+                                    const val = e.target.value || null
+                                    if (val === NEW_CATEGORY_VALUE) {
+                                      const created = await createCategory()
+                                      if (created) {
+                                        updateSelection(tx.id, 'category_id', created.id)
+                                        updateSelection(tx.id, 'subcategory_id', null)
+                                      }
+                                      return
                                     }
-                                    return
-                                  }
-                                  updateSelection(tx.id, 'category_id', val)
-                                  updateSelection(tx.id, 'subcategory_id', null)
-                                }}
-                              >
-                                <option value="">Elegí…</option>
-                                {categories.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                                <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
-                              </select>
-                            </td>
-                            <td className="px-2 py-2">
-                              <select
-                                className="border rounded-md px-2 py-1 text-sm"
-                                value={sel.subcategory_id || ''}
-                                onChange={async (e) => {
-                                  const val = e.target.value || null
-                                  if (val === NEW_SUBCATEGORY_VALUE && sel.category_id) {
-                                    const created = await createSubcategory(sel.category_id)
-                                    if (created) {
-                                      updateSelection(tx.id, 'subcategory_id', created.id)
-                                    }
-                                    return
-                                  }
-                                  updateSelection(tx.id, 'subcategory_id', val)
-                                }}
-                                disabled={!sel.category_id}
-                              >
-                                <option value="">(opcional)</option>
-                                {subsForCat.map((s) => (
-                                  <option key={s.id} value={s.id}>
-                                    {s.name}
-                                  </option>
-                                ))}
-                                {sel.category_id && <option value={NEW_SUBCATEGORY_VALUE}>+ Nueva subcategoría…</option>}
-                              </select>
+                                    updateSelection(tx.id, 'category_id', val)
+                                    updateSelection(tx.id, 'subcategory_id', null)
+                                  }}
+                                >
+                                  <option value="">Elegí…</option>
+                                  {categories.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.name}
+                                    </option>
+                                  ))}
+                                  <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
+                                </select>
+                              </div>
                             </td>
                             <td className="px-2 py-2 text-right">
                               <button

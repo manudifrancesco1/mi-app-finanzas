@@ -9,11 +9,9 @@ type Tx = {
   date: string
   description: string | null
   category_id: number
-  subcategory_id: number | null
   expense_mode: 'variable' | 'fixed'
   payment_type?: 'credito' | 'debito' | null
   category: { name: string }
-  subcategory: { name: string } | null
 }
 
 const Expenses: NextPage = () => {
@@ -87,7 +85,6 @@ const Expenses: NextPage = () => {
       date,
       description: existingTx?.description ?? '',
       category_id,
-      subcategory_id: existingTx?.subcategory_id ?? null,
       expense_mode: 'fixed' as const
     }
 
@@ -134,11 +131,9 @@ const Expenses: NextPage = () => {
         date,
         description,
         category_id,
-        subcategory_id,
         expense_mode,
         payment_type,
-        category:category_id(name),
-        subcategory:subcategory_id(name)
+        category:category_id(name)
       `)
       .eq('user_id', uid)
       .order('date', { ascending: false })
@@ -149,27 +144,18 @@ const Expenses: NextPage = () => {
     } else if (data) {
       const mapped: Tx[] = data.map(item => {
         const catField = (item as any).category
-        const subField = (item as any).subcategory
-
         const categoryName = Array.isArray(catField)
           ? catField[0]?.name ?? ''
           : catField?.name ?? ''
-
-        const subcategoryName = Array.isArray(subField)
-          ? subField[0]?.name ?? null
-          : subField?.name ?? null
-
         return {
           id: item.id,
           amount: item.amount,
           date: item.date,
           description: item.description,
           category_id: item.category_id,
-          subcategory_id: item.subcategory_id,
           expense_mode: (item as any).expense_mode ?? 'variable',
           payment_type: (item as any).payment_type ?? null,
-          category: { name: categoryName },
-          subcategory: subcategoryName ? { name: subcategoryName } : null
+          category: { name: categoryName }
         }
       })
       setTxs(mapped)
@@ -187,7 +173,6 @@ const Expenses: NextPage = () => {
       const fields = [
         tx.date,
         tx.category.name,
-        tx.subcategory?.name ?? '',
         tx.description ?? ''
       ]
         .join(' ')
@@ -356,9 +341,7 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                     date: todayStr,
                     description: '',
                     category_id: null,
-                    subcategory_id: null,
-                    new_category: '',
-                    new_subcategory: ''
+                    new_category: ''
                   } as ExpenseForm)
                   setShowVarModal(true)
                 }}
@@ -381,7 +364,7 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
             type="text"
             value={filterText}
             onChange={e => setFilterText(e.target.value)}
-            placeholder="Filtrar por fecha, categoría, subcategoría o descripción…"
+            placeholder="Filtrar por fecha, categoría o descripción…"
             className="w-full px-3 py-2.5 border rounded-xl shadow-sm focus:outline-none focus:ring"
           />
         </div>
@@ -494,12 +477,10 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                       setSelectedVar({
                         id: tx.id,
                         category_id: tx.category_id,
-                        subcategory_id: tx.subcategory_id,
                         amount: String(tx.amount),
                         date: tx.date,
                         description: tx.description || '',
-                        new_category: tx.category.name,
-                        new_subcategory: tx.subcategory?.name || ''
+                        new_category: tx.category.name
                       } as ExpenseForm)
                       setShowVarModal(true)
                     }}
@@ -513,7 +494,6 @@ type MonthGroup = { key: string; label: string; items: Tx[] }
                         <div className="mt-0.5 text-xs text-gray-500 flex items-center gap-2 min-w-0">
                           <span className="truncate">
                             {tx.category.name}
-                            {tx.subcategory?.name ? ` • ${tx.subcategory.name}` : ''}
                           </span>
                           {tx.payment_type === 'credito' ? (
                             <span className="px-1.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px]">Crédito</span>

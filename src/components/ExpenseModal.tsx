@@ -1,3 +1,17 @@
+const ALLOWED_CATEGORY_NAMES = [
+  'Alimentación',
+  'Comidas afuera',
+  'Transporte',
+  'Salud',
+  'Educación',
+  'Hogar',
+  'Ropa',
+  'Ocio',
+  'Viajes',
+  'Regalos',
+  'Trabajo',
+  'Varios'
+]
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 
 const normalizeName = (s: string) => s.trim().toLowerCase()
@@ -19,14 +33,12 @@ import { supabase } from '@/lib/supabaseClient'
 export type ExpenseForm = {
   id?: number
   category_id: number | null
-  subcategory_id?: number | null
   amount: string
   date: string
   description: string
   payment_type?: string
   // opcionales que podrían venir desde callers viejos; se ignoran si están
   new_category?: string
-  new_subcategory?: string
 }
 
 interface Props {
@@ -49,12 +61,9 @@ const LAST_CATEGORY_KEY = 'mf_last_category_id'
 
 export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Props) {
   const [categories, setCategories] = useState<any[]>([])
-  const [subcategories, setSubcategories] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [addingNew, setAddingNew] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
-  const [addingNewSub, setAddingNewSub] = useState(false)
-  const [newSubName, setNewSubName] = useState('')
 
   // Read last preferences
   const lastPayment = useMemo(() => {
@@ -70,10 +79,8 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
     date: initial?.date ?? '',
     description: initial?.description ?? '',
     category_id: initial?.category_id ?? lastCategoryId ?? null,
-    subcategory_id: initial?.subcategory_id ?? null,
     payment_type: initial?.payment_type ?? lastPayment,
-    new_category: '',
-    new_subcategory: ''
+    new_category: ''
   })
 
   const isEditing = Boolean(form.id)
@@ -81,26 +88,37 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
 
   useEffect(() => { amountInputRef.current?.focus() }, [])
 
+  useEffect(() => {
+    if (!form.date) {
+      const d = new Date()
+      const yyyy = d.getFullYear()
+      const mm = String(d.getMonth() + 1).padStart(2, '0')
+      const dd = String(d.getDate()).padStart(2, '0')
+      setForm(prev => ({ ...prev, date: `${yyyy}-${mm}-${dd}` }))
+    }
+  }, [])
+
   useEffect(() => { loadCategories() }, [])
 
   async function loadCategories() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setCategories([]); return }
-    const { data, error } = await supabase.from('categories').select('id, name').eq('user_id', session.user.id).order('name', { ascending: true })
-    if (error) { console.error(error); setCategories([]) } else { setCategories(uniqueByName(data || [])) }
-  }
-
-  async function loadSubcategories(categoryId: number | null) {
-    if (!categoryId) { setSubcategories([]); return }
-    const { data, error } = await supabase.from('subcategories').select('id, name, category_id').eq('category_id', categoryId).order('name', { ascending: true })
-    if (error) { console.error(error); setSubcategories([]) } else { setSubcategories(uniqueByName((data || []).map((s: any) => ({ id: s.id, name: s.name })))) }
+    const { data, error } = await supabase
+      .from('categories')
+      .select('id, name, is_fixed, type')
+      .eq('user_id', session.user.id)
+      .order('name', { ascending: true })
+    if (error) {
+      console.error(error)
+      setCategories([])
+    } else {
+      const all = uniqueByName((data || []).map((c: any) => ({ id: c.id, name: c.name })))
+      const filtered = all.filter(c => ALLOWED_CATEGORY_NAMES.includes(c.name) || c.id === (form.category_id ?? -1))
+      setCategories(filtered.length > 0 ? filtered : all)
+    }
   }
 
   useEffect(() => {
-    loadSubcategories(form.category_id || null)
-    setAddingNewSub(false)
-    setNewSubName('')
-    setForm(prev => ({ ...prev, subcategory_id: null }))
     // persist last category
     if (form.category_id) {
       try { localStorage.setItem(LAST_CATEGORY_KEY, String(form.category_id)) } catch {}
@@ -126,6 +144,11 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
     e.preventDefault()
     setLoading(true)
 
+    // simple client-side validation
+    if (!form.amount) { amountInputRef.current?.focus(); setLoading(false); return }
+    if (!form.date) { setLoading(false); alert('Elegí una fecha'); return }
+    if (!form.category_id && !addingNew) { setLoading(false); alert('Seleccioná una categoría'); return }
+
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { alert('No estás autenticado'); setLoading(false); return }
     const user = session.user
@@ -141,27 +164,15 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
       const exact = (existingCats || []).find(c => normalizeName(c.name) === newNameKey)
       if (exact) categoryId = exact.id
       else {
-        const { data: created, error: catErr } = await supabase.from('categories').insert({ name: newNameRaw, user_id: user.id }).select('id, name').single()
+        const { data: created, error: catErr } = await supabase
+          .from('categories')
+          .insert({ name: newNameRaw, user_id: user.id, is_fixed: false, type: 'expense' })
+          .select('id, name')
+          .single()
         if (catErr || !created) { console.error('Error al crear categoría:', catErr); alert('Error al crear categoría'); setLoading(false); return }
         categoryId = created.id
       }
       await loadCategories(); setAddingNew(false); setNewCategoryName('')
-    }
-
-    // ===== Subcategoría (opcional) =====
-    let subcategoryId = form.subcategory_id ?? null
-    if (addingNewSub && newSubName.trim() && categoryId) {
-      const raw = newSubName.trim()
-      const { data: existSubs, error: findSubErr } = await supabase.from('subcategories').select('id, name, category_id').eq('category_id', categoryId).ilike('name', raw)
-      if (findSubErr) { console.error('Error buscando subcategoría existente:', findSubErr); alert('Error buscando subcategoría existente'); setLoading(false); return }
-      const exactSub = (existSubs || []).find(s => normalizeName(s.name) === normalizeName(raw))
-      if (exactSub) subcategoryId = exactSub.id
-      else {
-        const { data: createdSub, error: insSubErr } = await supabase.from('subcategories').insert({ name: raw, category_id: categoryId }).select('id, name').single()
-        if (insSubErr || !createdSub) { console.error('Error al crear subcategoría:', insSubErr); alert('Error al crear subcategoría'); setLoading(false); return }
-        subcategoryId = createdSub.id
-      }
-      await loadSubcategories(categoryId); setAddingNewSub(false); setNewSubName('')
     }
 
     // ===== Guardar transacción variable =====
@@ -171,7 +182,6 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
       date: form.date,
       description: form.description,
       category_id: categoryId,
-      subcategory_id: subcategoryId,
       expense_mode: 'variable' as const,
       payment_type: form.payment_type || null
     }
@@ -198,27 +208,36 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
 
   // Filtered lists for simple search (works with select via datalist)
   const catNames = useMemo(() => uniqueByName(categories), [categories])
-  const subNames = useMemo(() => uniqueByName(subcategories), [subcategories])
 
   return (
     <form onSubmit={handleSubmit} className="p-0 sm:p-4 w-full h-full">
       {/* Container for mobile full-screen: header + scroll + footer sticky */}
       <div className="flex flex-col h-full max-h-[90vh] sm:max-h-none">
         {/* Header */}
-        <div className="px-4 pt-4 pb-2 sm:pt-0">
-          <h2 className="text-lg font-semibold">{isEditing ? 'Editar gasto' : 'Nuevo gasto variable'}</h2>
+        <div className="px-3 pt-2 pb-1 sm:pt-0 bg-white/60 backdrop-blur-xl flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900">
+            {isEditing ? 'Editar gasto' : 'Nuevo gasto'}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            className="p-2 -mr-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-md"
+          >
+            ✕
+          </button>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto px-4 pb-24 sm:pb-4">
+        <div className="flex-1 overflow-auto px-3 pb-20 sm:pb-4">
           {/* Tipo de pago */}
           <div className="mb-3">
-            <label className="block mb-1">Tipo de pago</label>
-            <div className="flex gap-2">
+            <label className="block mb-1 text-[13px] font-medium text-gray-700">Tipo de pago</label>
+            <div className="inline-flex rounded-full bg-gray-100 p-1 shadow-inner gap-1">
               <button
                 type="button"
                 aria-pressed={form.payment_type === 'credito'}
-                className={`px-4 py-2 rounded-full border text-sm ${form.payment_type === 'credito' ? 'bg-violet-600 text-white border-violet-600' : 'bg-gray-100 text-gray-800 border-gray-300'}`}
+                className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-all ${form.payment_type === 'credito' ? 'bg-white shadow-sm ring-1 ring-black/5 text-gray-900' : 'bg-transparent text-gray-600 hover:text-gray-900'}`}
                 onClick={() => setForm(prev => ({ ...prev, payment_type: 'credito' }))}
               >
                 Crédito
@@ -226,7 +245,7 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
               <button
                 type="button"
                 aria-pressed={form.payment_type === 'debito'}
-                className={`px-4 py-2 rounded-full border text-sm ${form.payment_type === 'debito' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-gray-100 text-gray-800 border-gray-300'}`}
+                className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-all ${form.payment_type === 'debito' ? 'bg-white shadow-sm ring-1 ring-black/5 text-gray-900' : 'bg-transparent text-gray-600 hover:text-gray-900'}`}
                 onClick={() => setForm(prev => ({ ...prev, payment_type: 'debito' }))}
               >
                 Débito
@@ -236,8 +255,7 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
 
           {/* Monto */}
           <div className="mb-3">
-            <label className="block mb-1">Monto</label>
-            <div className="flex items-center border rounded px-2">
+            <div className="flex items-center border border-gray-200 rounded-2xl px-2.5 bg-white shadow-inner focus-within:ring-2 focus-within:ring-black/10">
               <span className="text-gray-500 mr-2">$</span>
               <input
                 ref={amountInputRef}
@@ -252,7 +270,7 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
                 }}
                 onBlur={() => setForm(prev => ({ ...prev, amount: formatMoney(prev.amount) }))}
                 placeholder="0,00"
-                className="w-full py-2 outline-none"
+                className="w-full py-2 outline-none text-base bg-transparent placeholder:text-gray-400 tabular-nums"
                 required
               />
             </div>
@@ -260,14 +278,14 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
 
           {/* Categoría */}
           <div className="mb-3">
-            <label className="block mb-1">Categoría</label>
+            <label className="block mb-1 text-[13px] font-medium text-gray-700">Categoría</label>
             {!addingNew ? (
               <select
                 value={form.category_id || ''}
                 onChange={e => e.target.value === 'new' ? setAddingNew(true) : setForm({ ...form, category_id: e.target.value ? Number(e.target.value) : null })}
-                className="w-full border rounded px-2 py-2"
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 bg-white shadow-sm focus:ring-2 focus:ring-black/10 focus:border-gray-300"
               >
-                <option value="">Buscar o seleccionar…</option>
+                <option value="">Elegí una categoría…</option>
                 {catNames.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
@@ -279,7 +297,7 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
                   type="text"
                   value={newCategoryName}
                   onChange={e => setNewCategoryName(e.target.value)}
-                  className="w-full border rounded px-2 py-2 mb-2"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 mb-2 bg-white shadow-sm focus:ring-2 focus:ring-black/10 focus:border-gray-300"
                   placeholder="Nombre de la nueva categoría"
                 />
                 <button type="button" onClick={() => setAddingNew(false)} className="text-sm text-blue-600">Cancelar</button>
@@ -287,58 +305,29 @@ export default function ExpenseModal({ initial, onClose, onSaved, onDelete }: Pr
             )}
           </div>
 
-          {/* Subcategoría */}
-          <div className="mb-3">
-            <label className="block mb-1">Subcategoría (opcional)</label>
-            {!addingNewSub ? (
-              <div className="flex gap-2">
-                <select
-                  value={form.subcategory_id || ''}
-                  onChange={e => { const v = e.target.value; setForm(prev => ({ ...prev, subcategory_id: v ? Number(v) : null })) }}
-                  className="w-full border rounded px-2 py-2"
-                  disabled={!form.category_id}
-                >
-                  <option value="">Sin subcategoría</option>
-                  {subNames.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-                <button type="button" onClick={() => setAddingNewSub(true)} className="px-3 py-2 text-sm border rounded disabled:opacity-50" disabled={!form.category_id}>+ Nueva</button>
-              </div>
-            ) : (
-              <div>
-                <input
-                  type="text"
-                  value={newSubName}
-                  onChange={e => setNewSubName(e.target.value)}
-                  className="w-full border rounded px-2 py-2 mb-2"
-                  placeholder="Nombre de la nueva subcategoría"
-                />
-                <button type="button" onClick={() => setAddingNewSub(false)} className="text-sm text-blue-600">Cancelar</button>
-              </div>
-            )}
-          </div>
 
           {/* Fecha */}
           <div className="mb-3">
-            <label className="block mb-1">Fecha</label>
-            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required className="w-full border rounded px-2 py-2" />
+            <label className="block mb-1 text-[13px] font-medium text-gray-700">Fecha</label>
+            <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required className="w-full border border-gray-200 rounded-xl px-3 py-2 bg-white shadow-sm focus:ring-2 focus:ring-black/10 focus:border-gray-300" />
           </div>
 
           {/* Descripción */}
           <div className="mb-3">
-            <label className="block mb-1">Descripción (opcional)</label>
-            <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full border rounded px-2 py-2" />
+            <label className="block mb-1 text-[13px] font-medium text-gray-700">Descripción (opcional)</label>
+            <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="w-full border border-gray-200 rounded-xl px-3 py-2 bg-white shadow-sm focus:ring-2 focus:ring-black/10 focus:border-gray-300" />
           </div>
         </div>
 
         {/* Footer sticky */}
-        <div className="px-4 py-3 border-t bg-white sticky bottom-0 flex gap-2 justify-end">
+        <div className="px-3 py-2 border-t border-gray-100 bg-white/60 backdrop-blur-xl sticky bottom-0 flex gap-2 justify-end">
           {isEditing && (
-            <button type="button" onClick={handleDelete} className="px-3 py-2 border rounded text-red-600">Eliminar</button>
+            <button type="button" onClick={handleDelete} className="px-3 py-1.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-100">Eliminar</button>
           )}
-          <button type="button" onClick={onClose} className="px-4 py-2 border rounded">Cancelar</button>
-          <button type="submit" disabled={loading || !form.amount || !form.date || !form.category_id} className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">Guardar</button>
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 shadow-sm">Cancelar</button>
+          <button type="submit" disabled={loading || !form.amount || !form.date || !form.category_id} className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 active:bg-blue-600 text-white shadow-md disabled:opacity-50">
+            {loading ? 'Guardando…' : 'Guardar'}
+          </button>
         </div>
       </div>
     </form>
