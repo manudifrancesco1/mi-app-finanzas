@@ -404,10 +404,113 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           parsedAuth
         );
 
-        // Guard against duplicates when we do NOT have an authorization code.
-        // If we do have `parsedAuth`, the (user_id,hash) upsert is sufficient.
-        if (!parsedAuth && parsedMerchant && parsedAmount != null) {
-          const { data: existsRows, error: existsErr } = await admin
+        // ---- Hard guards to avoid re-inserting the same message ----
+        // 0) If this exact IMAP UID is already stored for this user/mailbox, skip early (prevents unique (imap_uid) violations on retries)
+        {
+          const { data: uidRows, error: uidErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('imap_mailbox', imap_mailbox)
+            .eq('imap_uid', imap_uid)
+            .limit(1);
+
+          if (!uidErr && uidRows && uidRows.length > 0) {
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: { uid, status: 'duplicate-uid-skip', imap_mailbox, imap_uid, existing_id: uidRows[0].id }
+              });
+            }
+            continue;
+          }
+        }
+
+        // 0.1) If this RFC message-id is already stored for this user, skip too (prevents unique (message_id) violations)
+        if (messageId) {
+          const { data: midRows, error: midErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('message_id', messageId)
+            .limit(1);
+
+          if (!midErr && midRows && midRows.length > 0) {
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: { uid, status: 'duplicate-messageid-skip', message_id: messageId, existing_id: midRows[0].id }
+              });
+            }
+            continue;
+          }
+        }
+
+        // 1) If we have an authorization code, it identifies the authorization uniquely.
+        //    Skip insert if any existing row for this user already has the same auth_code.
+        if (parsedAuth && parsedAuth.trim()) {
+          const { data: authRows, error: authErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('auth_code', parsedAuth.trim())
+            .limit(1);
+
+          if (!authErr && authRows && authRows.length > 0) {
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: {
+                  uid,
+                  status: 'skipped-auth-dup',
+                  by: 'auth_code',
+                  auth_code: parsedAuth.trim(),
+                  existing_id: authRows[0].id
+                }
+              });
+            }
+            continue;
+          }
+        } else if (parsedMerchant && parsedAmount != null) {
+          // 2) Otherwise, do a *window* dedupe on the same merchant/amount/currency within +/- 1 day.
+          //    This prevents Visa's repeated day-shifted alerts from creating duplicates.
+          const yday = new Date(internal.getTime() - 24 * 60 * 60 * 1000);
+          const fromDate = formatYMDLocal(yday, 'America/Argentina/Buenos_Aires');
+          const toDate = formatYMDLocal(internal, 'America/Argentina/Buenos_Aires');
+
+          const { data: near, error: nearErr } = await admin
+            .from('email_transactions')
+            .select('id')
+            .eq('user_id', user_id)
+            .eq('merchant', parsedMerchant)
+            .eq('amount', parsedAmount)
+            .eq('currency', effectiveCurrency.toUpperCase())
+            .gte('date_local', fromDate)
+            .lte('date_local', toDate)
+            .limit(1);
+
+          if (!nearErr && near && near.length > 0) {
+            out.attempted++;
+            if (debugFlag) {
+              out.details.push({
+                _result: {
+                  uid,
+                  status: 'skipped-window-dup',
+                  by: 'date_local_window',
+                  merchant: parsedMerchant,
+                  amount: parsedAmount,
+                  currency: effectiveCurrency,
+                  fromDate,
+                  toDate,
+                  existing_id: near[0].id
+                }
+              });
+            }
+            continue;
+          }
+
+          // 2.1) As a last resort, keep old same-day check (exact date) for extra safety.
+          const { data: sameDayRows, error: sameDayErr } = await admin
             .from('email_transactions')
             .select('id')
             .eq('user_id', user_id)
@@ -417,15 +520,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             .eq('currency', effectiveCurrency.toUpperCase())
             .limit(1);
 
-          if (!existsErr && Array.isArray(existsRows) && existsRows.length > 0) {
+          if (!sameDayErr && sameDayRows && sameDayRows.length > 0) {
             out.attempted++;
             if (debugFlag) {
               out.details.push({
                 _result: {
                   uid,
                   status: 'duplicate-exists',
-                  by: 'content-check',
-                  existing_id: existsRows[0].id,
+                  by: 'same-day',
+                  existing_id: sameDayRows[0].id,
                   merchant: parsedMerchant,
                   amount: parsedAmount,
                   currency: effectiveCurrency,

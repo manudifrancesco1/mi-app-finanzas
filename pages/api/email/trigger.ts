@@ -21,14 +21,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       debug?: boolean
     }
 
-    // Construir origin del propio deployment (soporta Vercel/proxy)
-    const proto = (req.headers['x-forwarded-proto'] as string) || 'https'
-    const host = req.headers.host
+    // Build origin of the current deployment (works on Vercel and local dev)
+    const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined)
+    const isVercel = Boolean(process.env.VERCEL)
+    const proto = forwardedProto || (isVercel ? 'https' : 'http')
+    const host = req.headers.host as string
     const origin = `${proto}://${host}`
 
     const result: Json = { ok: true }
 
-    // 1) SYNC: llama al endpoint interno con el secret
+    // 1) SYNC: call internal endpoint with secret
     const syncResp = await fetch(`${origin}/api/email/sync`, {
       method: 'POST',
       headers: {
@@ -40,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const syncJson = await syncResp.json().catch(() => ({}))
     result.sync = { status: syncResp.status, ...syncJson }
 
-    // 2) PROMOTE: procesa los pendientes (processed=false, tx_id IS NULL)
+    // 2) PROMOTE: process pending rows (processed=false, tx_id IS NULL)
     const promoteResp = await fetch(`${origin}/api/email/promote`, {
       method: 'POST',
       headers: {

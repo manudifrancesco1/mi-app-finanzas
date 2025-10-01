@@ -689,9 +689,10 @@ const Dashboard: NextPage = () => {
             </ul>
           </section>
           {/* 5. Por categorizar section - last */}
-          <section className="order-1 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:sticky lg:top-20 self-start max-h-[calc(100vh-140px)] overflow-auto">
-            <header className="sticky top-0 z-10 bg-white pb-2 mb-2 flex items-center justify-between border-b">
+          <section className="order-1 bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 lg:p-6 flex flex-col lg:col-span-1 lg:col-start-3 lg:row-start-1">
+            <header className="pb-2 mb-2 flex items-center justify-between border-b">
               <h3 className="text-lg font-semibold">Por categorizar</h3>
+              <span className="hidden lg:inline text-xs text-gray-400 ml-2">Tip: en escritorio la lista usa el scroll de la página</span>
               <div className="shrink-0">
                 <button
                   onClick={handleEmailRefresh}
@@ -710,7 +711,7 @@ const Dashboard: NextPage = () => {
             ) : (
               <>
                 {/* Mobile-first list (phones) */}
-                <ul className="sm:hidden space-y-3">
+                <ul className="space-y-3">
                   {uncategorized.map((tx) => {
                     const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
                     return (
@@ -728,9 +729,12 @@ const Dashboard: NextPage = () => {
                             {quickCats.map((c) => (
                               <button
                                 key={c.id}
-                                onClick={() => {
+                                onClick={async () => {
                                   updateSelection(tx.id, 'category_id', c.id)
                                   updateSelection(tx.id, 'subcategory_id', null)
+                                  try {
+                                    await saveCategorization(tx.id)
+                                  } catch {}
                                 }}
                                 className={`px-3 py-1.5 rounded-full text-sm transition ${
                                   sel.category_id === c.id
@@ -785,90 +789,6 @@ const Dashboard: NextPage = () => {
                   })}
                 </ul>
 
-                {/* Desktop table (from sm and up) */}
-                <div className="hidden sm:block overflow-x-auto -mx-2 sm:mx-0">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-gray-500">
-                        <th className="px-2 py-2">Fecha</th>
-                        <th className="px-2 py-2">Descripción</th>
-                        <th className="px-2 py-2 text-right">Monto</th>
-                        <th className="px-2 py-2">Categoría</th>
-                        <th className="px-2 py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {uncategorized.map((tx) => {
-                        const sel = selection[tx.id] || { category_id: null, subcategory_id: null }
-                        return (
-                          <tr key={tx.id}>
-                            <td className="px-2 py-2 whitespace-nowrap">{humanDate(tx.date)}</td>
-                            <td className="px-2 py-2">{tx.description || '—'}</td>
-                            <td className="px-2 py-2 text-right tabular-nums">${formatARS(tx.amount)}</td>
-                            <td className="px-2 py-2">
-                              <div className="space-y-2">
-                                {quickCats.length > 0 && (
-                                  <div className="flex flex-wrap gap-2">
-                                    {quickCats.map((c) => (
-                                      <button
-                                        key={c.id}
-                                        onClick={() => {
-                                          updateSelection(tx.id, 'category_id', c.id)
-                                          updateSelection(tx.id, 'subcategory_id', null)
-                                        }}
-                                        className={`px-2.5 py-1 rounded-full text-xs transition ${
-                                          sel.category_id === c.id
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-                                        }`}
-                                      >
-                                        {c.name}
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                                <select
-                                  className="border rounded-md px-2 py-1 text-sm"
-                                  value={sel.category_id || ''}
-                                  onChange={async (e) => {
-                                    const val = e.target.value || null
-                                    if (val === NEW_CATEGORY_VALUE) {
-                                      const created = await createCategory()
-                                      if (created) {
-                                        updateSelection(tx.id, 'category_id', created.id)
-                                        updateSelection(tx.id, 'subcategory_id', null)
-                                      }
-                                      return
-                                    }
-                                    updateSelection(tx.id, 'category_id', val)
-                                    updateSelection(tx.id, 'subcategory_id', null)
-                                  }}
-                                >
-                                  <option value="">Elegí…</option>
-                                  {categories.map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                      {c.name}
-                                    </option>
-                                  ))}
-                                  <option value={NEW_CATEGORY_VALUE}>+ Nueva categoría…</option>
-                                </select>
-                              </div>
-                            </td>
-                            <td className="px-2 py-2 text-right">
-                              <button
-                                onClick={() => saveCategorization(tx.id)}
-                                disabled={!!savingIds[tx.id] || !selection[tx.id]?.category_id}
-                                className="px-3 py-1 rounded-md bg-blue-600 text-white text-xs disabled:opacity-50"
-                              >
-                                {savingIds[tx.id] ? 'Guardando…' : 'Guardar'}
-                              </button>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
               </>
             )}
           </section>

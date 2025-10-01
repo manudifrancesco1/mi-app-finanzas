@@ -82,8 +82,7 @@ export default function EmailsPage() {
     })
     return () => {
       try {
-        // Optional chaining in case the subscription object shape differs
-        // or the component unmounts before it's set.
+        // Optional chaining in case the subscription shape differs
         // @ts-ignore
         sub?.subscription?.unsubscribe?.()
       } catch {}
@@ -140,47 +139,24 @@ export default function EmailsPage() {
         throw new Error('No hay sesión activa')
       }
 
-      const SECRET = process.env.NEXT_PUBLIC_EMAIL_INGEST_SECRET as string
-      if (!SECRET || !SECRET.trim()) {
-        throw new Error('Falta NEXT_PUBLIC_EMAIL_INGEST_SECRET')
-      }
-
-      // 1) SYNC: leer emails y guardarlos en email_transactions
-      const syncRes = await fetch('/api/email/sync', {
+      // Usamos el proxy server-side que encadena SYNC + PROMOTE y usa el secret del servidor.
+      const resp = await fetch('/api/email/trigger', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-email-secret': SECRET,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_id: uid, limit: 200, days: 30, debug: true }),
       })
-      const syncJson = await syncRes.json().catch(() => ({} as any))
-      if (!syncRes.ok) {
-        const err = syncJson?.details?.[0]?.error || syncJson?.error || 'Error en sync'
+      const json = await resp.json().catch(() => ({} as any))
+      if (!resp.ok) {
+        const err = json?.error || json?.sync?.details?.[0]?.error || json?.promote?.details?.[0]?.error || `trigger failed: ${resp.status}`
         throw new Error(err)
       }
 
-      // 2) PROMOTE: parsear pendientes y volcarlos en transactions
-      const promoteRes = await fetch('/api/email/promote', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-email-secret': SECRET,
-        },
-        body: JSON.stringify({ user_id: uid, limit: 80 }),
-      })
-      const promoteJson = await promoteRes.json().catch(() => ({} as any))
-      if (!promoteRes.ok) {
-        const err = promoteJson?.details?.[0]?.error || promoteJson?.error || 'Error en promote'
-        throw new Error(err)
-      }
+      const attempted = Number(json?.sync?.attempted ?? 0)
+      const inserted  = Number(json?.sync?.inserted  ?? 0)
+      const syncErrors = Number(json?.sync?.errors ?? 0)
 
-      const attempted = Number(syncJson?.attempted ?? 0)
-      const inserted  = Number(syncJson?.inserted  ?? 0)
-      const syncErrors = Number(syncJson?.errors ?? 0)
-
-      const updated = Number(promoteJson?.updated ?? 0)
-      const promoteErrors = Number(promoteJson?.errors ?? 0)
+      const updated = Number(json?.promote?.updated ?? 0)
+      const promoteErrors = Number(json?.promote?.errors ?? 0)
 
       setMsg(
         `Sync: intentados ${attempted}, insertados ${inserted}, errores ${syncErrors} · ` +
@@ -208,6 +184,16 @@ export default function EmailsPage() {
             className="px-3 py-2 rounded border text-sm"
             style={{ minWidth: 220 }}
           />
+          <select
+            className="px-2 py-2 rounded border text-sm"
+            value={processedFilter}
+            onChange={e => setProcessedFilter(e.target.value as any)}
+            title="Filtrar por estado de procesamiento"
+          >
+            <option value="all">Todos</option>
+            <option value="pending">Pendientes</option>
+            <option value="done">Procesados</option>
+          </select>
           <button
             onClick={trigger}
             disabled={syncing}
