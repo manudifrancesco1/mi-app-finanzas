@@ -264,6 +264,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const htmlPart = (parsed.html ? stripHtml(String(parsed.html)) : '');
         const bodyText = `${textPart} ${htmlPart}`.replace(/\s+/g, ' ').trim();
 
+        // Authorization code (helps dedupe across duplicated alerts with different dates)
+        // Patterns seen in Visa alerts: "Autorización: 007791" or "Autorizacion: 046222"
+        const mAuth = bodyText.match(/Autorizaci[oó]n:\s*([A-Za-z0-9\-]{4,})/i);
+        const parsedAuth: string | null = mAuth ? mAuth[1].trim() : null;
+
         // Helper to parse amounts like 1.971.000,00 or 1649.00
         const parseAmount = (raw: string | null | undefined): number | null => {
           if (!raw) return null;
@@ -342,20 +347,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const mLastTarj = bodyText.match(/Tarjeta:\s*(\d{4})/i) || bodyText.match(/terminaci[oó]n\s*(\d{4})/i);
         if (mLastTarj) parsedLast4 = mLastTarj[1];
 
-        // Build a content-based hash to dedupe the same alert even if IMAP UID changes
+        // Build a content-based hash to dedupe the same alert even if IMAP UID changes.
         const buildContentHash = (
           userId: string,
           dateLocal: string,
           merchant: string | null,
           amount: number | null,
           currency: string | null,
-          subject?: string | null
+          subject?: string | null,
+          authCode?: string | null
         ) => {
-          // Do NOT include card last4 in the hash (can be missing/inconsistent across copies)
           const baseMerchant = (merchant || '').toUpperCase().trim();
           const baseAmount = amount != null ? String(amount) : '';
           const baseCurrency = (currency || '').toUpperCase().trim();
-          // Include a normalized subject fallback to stabilize when merchant/amount parsing fails
+
+          // If we have an authorization code, build a stable key that ignores dates entirely.
+          if (authCode && authCode.trim()) {
+            const keyAuth = [
+              userId || '',
+              baseMerchant || '(unknown-merchant)',
+              baseAmount || '(unknown-amount)',
+              baseCurrency || '(unknown-currency)',
+              authCode.trim().toUpperCase(),
+            ].join('|');
+            return createHash('sha256').update(keyAuth).digest('hex');
+          }
+
+          // Fallback: include a normalized subject and the local date (legacy behavior)
           const normSubject = (subject || '')
             .normalize('NFKD')
             .replace(/\p{Diacritic}/gu, '')
@@ -373,8 +391,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           return createHash('sha256').update(key).digest('hex');
         }
 
-        // Always use a stable content hash (never UID-based), using subject as fallback
-        let hash_mode: 'content' = 'content';
+        // Always use a stable content hash (never UID-based), using subject as fallback or auth code if present
+        let hash_mode: 'content' | 'auth' = parsedAuth ? 'auth' : 'content';
         const effectiveCurrency = (parsedCurrency || defaultCurrency || 'ARS');
         const hash = buildContentHash(
           user_id,
@@ -382,11 +400,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           parsedMerchant,
           parsedAmount,
           effectiveCurrency,
-          subject
+          subject,
+          parsedAuth
         );
 
-        // Guard against duplicates even if hash changes in the future: check by (user_id, date_local, merchant, amount, currency)
-        if (parsedMerchant && parsedAmount != null) {
+        // Guard against duplicates when we do NOT have an authorization code.
+        // If we do have `parsedAuth`, the (user_id,hash) upsert is sufficient.
+        if (!parsedAuth && parsedMerchant && parsedAmount != null) {
           const { data: existsRows, error: existsErr } = await admin
             .from('email_transactions')
             .select('id')
@@ -398,7 +418,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
             .limit(1);
 
           if (!existsErr && Array.isArray(existsRows) && existsRows.length > 0) {
-            // Already captured — record as duplicate and skip insert
             out.attempted++;
             if (debugFlag) {
               out.details.push({
@@ -419,7 +438,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         }
 
         // Upsert deduping by (user_id, hash) — index: email_tx_user_hash_key
-        // (ignoreDuplicates=true ensures we never reset processed=true back to false on re-runs)
+        // Now: persist auth_code and allow updating on conflict (without touching `processed`)
         const { data: upData, error: upErr }: { data: any[] | null; error: any } = await admin
           .from('email_transactions')
           .upsert([
@@ -443,12 +462,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               amount: parsedAmount,
               currency: effectiveCurrency.toUpperCase(),
               card_last4: parsedLast4,
-              // IMPORTANT: we do NOT set `processed` here to avoid flipping a row back to false on conflict
+              auth_code: parsedAuth, // Persist auth code when present
+              // IMPORTANT: we do NOT set `processed` here, so we won't flip true->false on conflict.
 
               gmail_msgid: gmail_msgid,
               hash,
             }
-          ], { onConflict: 'user_id,hash', ignoreDuplicates: true })
+          ], { onConflict: 'user_id,hash', ignoreDuplicates: false })
           .select()
 
         out.attempted++
@@ -459,7 +479,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               uid,
               subject,
               conflictTarget: 'user_id,hash',
-              hash_mode: 'content',
+              hash_mode,
+              hasAuth: Boolean(parsedAuth),
+              auth_prefix: parsedAuth ? parsedAuth.slice(0, 4) : null,
               hasMessageId: Boolean(messageId),
               imap_uid,
               row_user: user_id,
